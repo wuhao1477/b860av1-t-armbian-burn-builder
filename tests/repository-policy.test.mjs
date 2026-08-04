@@ -4,7 +4,7 @@ import test from 'node:test';
 
 import { inspectTrackedFiles } from '../src/repository-policy.mjs';
 
-test('repository contains source and documentation only', () => {
+test('repository contains source, documentation, and pinned board inputs only', () => {
   assert.deepEqual(inspectTrackedFiles(new URL('..', import.meta.url)), []);
 });
 
