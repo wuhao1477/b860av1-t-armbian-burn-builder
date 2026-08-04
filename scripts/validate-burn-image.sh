@@ -12,6 +12,6 @@ for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf 
   [[ -s "$tmp/unpack/$name" ]] || { echo "missing $name" >&2; exit 1; }
 done
 magic=$(od -An -tx4 -j8 -N4 "$image" | tr -d ' ')
-[[ "$magic" == 5619b527 ]] || { echo "unexpected Amlogic v2 version magic: $magic" >&2; exit 1; }
+[[ "$magic" == 27b51956 ]] || { echo "unexpected Amlogic v2 version magic: $magic" >&2; exit 1; }
 file "$tmp/unpack/data.PARTITION" | grep -q 'Android sparse' || { echo 'data.PARTITION is not sparse' >&2; exit 1; }
 echo 'format-valid / hardware-unverified'
