@@ -102,7 +102,7 @@ jobs:
           set -Eeuo pipefail
           printf 'Input fingerprint: %s\nPublic release: %s\nStatus: format-valid / hardware-unverified\n' \
             "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" > out/RELEASE.md
-          sha256sum out/burn.img out/burn.img.xz > out/SHA256SUMS
+          (cd out && sha256sum burn.img burn.img.xz > SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: b860-burn-output
