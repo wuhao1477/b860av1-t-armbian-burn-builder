@@ -2,7 +2,7 @@ name: Weekly B860 burn image
 
 on:
   schedule:
-    - cron: '23 3 */7 * *'
+    - cron: '23 3 * * 1'
   workflow_dispatch:
     inputs:
       force:
