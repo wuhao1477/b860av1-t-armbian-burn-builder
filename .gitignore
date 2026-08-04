@@ -1,0 +1,16 @@
+node_modules/
+out/
+tmp/
+artifacts/
+resolved-sources.json
+validation-report.json
+SHA256SUMS
+*.img
+*.img.gz
+*.img.xz
+*.burn.img
+*.PARTITION
+*.USB
+.DS_Store
+.codegraph/
+.codebase-memory/

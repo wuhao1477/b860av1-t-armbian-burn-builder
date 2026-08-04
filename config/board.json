@@ -1,0 +1,34 @@
+{
+  "model": "ZTE ZXV10 B860AV1.1-T",
+  "profile": "b860av1-t",
+  "architecture": "arm64",
+  "memoryLimitMiB": 1024,
+  "storageCapacityBytes": 8000000000,
+  "storageSafetyMarginBytes": 134217728,
+  "dtb": "meson-gxl-s905x-p212-b860av11t.dtb",
+  "dtbBuild": {
+    "repository": "S-9527/meson-gxl-s905x-p212",
+    "sourcePath": "repair/meson-gxl-s905x-p212.dts",
+    "commit": "624b3e57e27fd39476b3d6528e8a61867559d8c8",
+    "rawSourceUrl": "https://raw.githubusercontent.com/S-9527/meson-gxl-s905x-p212/624b3e57e27fd39476b3d6528e8a61867559d8c8/repair/meson-gxl-s905x-p212.dts",
+    "sourceSha256": "b52b6c6deea1d6b626d052042708f54eca65c9b7ffda56dfe8ca5fa0907cee7d",
+    "license": "MIT",
+    "output": "meson-gxl-s905x-p212-b860av11t.dtb",
+    "sourceDateEpoch": 0,
+    "reproducibleFromSource": true
+  },
+  "ubootOverload": "u-boot-s905x-s912.bin",
+  "ubootOverloadBuild": {
+    "patch": "patches/u-boot/u-boot-s905x-s912.patch",
+    "patchSha256": "e6d8c1663c714af95e21e85be2ad7049821cf86e94ec453cafed5d5135bfa7e9",
+    "defconfig": "libretech-cc_defconfig",
+    "output": "u-boot.bin",
+    "crossCompile": "aarch64-linux-gnu-",
+    "sourceDateEpoch": 0,
+    "reproducibleFromSource": true,
+    "instructionsUrl": "https://github.com/armbian/build/blob/main/config/optional/boards/aml-s9xx-box/_packages/bsp-cli/boot/build-u-boot/readme.txt",
+    "patchSourceUrl": "https://github.com/armbian/build/blob/main/config/optional/boards/aml-s9xx-box/_packages/bsp-cli/boot/build-u-boot/u-boot-s905x-s912.patch"
+  },
+  "bootloaderGapMiB": 4,
+  "hardwareStatus": "hardware-unverified"
+}

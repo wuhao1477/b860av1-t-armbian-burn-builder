@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "boardProfile": "b860av1-t",
+  "capabilities": {
+    "emmc": {
+      "kernelConfig": {
+        "CONFIG_MMC_MESON_GX": "y"
+      },
+      "deviceTreeChecks": [
+        { "node": "/soc/apb@d0000000/mmc@74000", "property": "status", "type": "string", "expected": "okay" },
+        { "node": "/soc/apb@d0000000/mmc@74000", "property": "bus-width", "type": "u32", "expected": 8 },
+        { "node": "/soc/apb@d0000000/mmc@74000", "property": "max-frequency", "type": "u32", "expected": 200000000 },
+        { "node": "/soc/apb@d0000000/mmc@74000", "property": "non-removable", "type": "present" },
+        { "node": "/soc/apb@d0000000/mmc@74000", "property": "cap-mmc-highspeed", "type": "present" },
+        { "node": "/soc/apb@d0000000/mmc@74000", "property": "mmc-ddr-1_8v", "type": "present" },
+        { "node": "/soc/apb@d0000000/mmc@74000", "property": "mmc-hs200-1_8v", "type": "present" }
+      ]
+    },
+    "ethernet": {
+      "kernelConfig": {
+        "CONFIG_STMMAC_ETH": "y",
+        "CONFIG_DWMAC_MESON": "y",
+        "CONFIG_MESON_GXL_PHY": "y"
+      },
+      "deviceTreeChecks": [
+        { "node": "/soc/ethernet@c9410000", "property": "status", "type": "string", "expected": "okay" },
+        { "node": "/soc/ethernet@c9410000", "property": "phy-mode", "type": "string", "expected": "rmii" },
+        { "node": "/soc/ethernet@c9410000", "property": "phy-handle", "type": "present" }
+      ]
+    },
+    "hdmi": {
+      "kernelConfig": {
+        "CONFIG_DRM_DW_HDMI": "y",
+        "CONFIG_DRM_MESON": "y",
+        "CONFIG_DRM_MESON_DW_HDMI": "y"
+      },
+      "deviceTreeChecks": [
+        { "node": "/soc/hdmi-tx@c883a000", "property": "status", "type": "string", "expected": "okay" },
+        { "node": "/soc/hdmi-tx@c883a000", "property": "hdmi-supply", "type": "present" },
+        { "node": "/hdmi-connector", "property": "compatible", "type": "string-list", "expected": "hdmi-connector" },
+        { "node": "/hdmi-connector", "property": "type", "type": "string", "expected": "a" }
+      ]
+    },
+    "infrared": {
+      "kernelConfig": {
+        "CONFIG_IR_MESON": "m"
+      },
+      "deviceTreeChecks": [
+        { "node": "/soc/bus@c8100000/ir@580", "property": "status", "type": "string", "expected": "okay" },
+        { "node": "/soc/bus@c8100000/ir@580", "property": "pinctrl-0", "type": "present" },
+        { "node": "/soc/bus@c8100000/ir@580", "property": "pinctrl-names", "type": "string-list", "expected": "default" }
+      ]
+    },
+    "usb": {
+      "kernelConfig": {
+        "CONFIG_PHY_MESON_GXL_USB2": "y"
+      },
+      "deviceTreeChecks": [
+        { "node": "/soc/usb@d0078080", "property": "status", "type": "string", "expected": "okay" },
+        { "node": "/soc/usb@d0078080", "property": "dr_mode", "type": "string", "expected": "host" },
+        { "node": "/soc/usb@d0078080", "property": "phys", "type": "present" },
+        { "node": "/soc/usb@d0078080", "property": "phy-names", "type": "string-list", "expected": "usb2-phy0" },
+        { "node": "/soc/usb@d0078080", "property": "phy-names", "type": "string-list", "expected": "usb2-phy1" }
+      ]
+    },
+    "wifi": {
+      "kernelConfig": {
+        "CONFIG_MMC_MESON_GX": "y"
+      },
+      "deviceTreeChecks": [
+        { "node": "/soc/apb@d0000000/mmc@70000", "property": "status", "type": "string", "expected": "okay" },
+        { "node": "/soc/apb@d0000000/mmc@70000", "property": "max-frequency", "type": "u32", "expected": 200000000 },
+        { "node": "/soc/apb@d0000000/mmc@70000/wifi@1", "property": "compatible", "type": "string-list", "expected": "realtek,rtl8189ftv" },
+        { "node": "/sdio-pwrseq", "property": "reset-gpios", "type": "hex-cell", "index": 1, "expected": "4c" }
+      ]
+    }
+  }
+}

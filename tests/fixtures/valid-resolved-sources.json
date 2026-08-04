@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 4,
+  "board": {
+    "model": "ZTE ZXV10 B860AV1.1-T",
+    "profile": "b860av1-t",
+    "architecture": "arm64",
+    "memoryLimitMiB": 1024,
+    "storageCapacityBytes": 8000000000,
+    "storageSafetyMarginBytes": 134217728,
+    "dtb": "meson-gxl-s905x-p212.dtb",
+    "ubootOverload": "u-boot-s905x-s912.bin",
+    "ubootOverloadBuild": {
+      "patch": "patches/u-boot/u-boot-s905x-s912.patch",
+      "patchSha256": "e6d8c1663c714af95e21e85be2ad7049821cf86e94ec453cafed5d5135bfa7e9",
+      "defconfig": "libretech-cc_defconfig",
+      "output": "u-boot.bin",
+      "crossCompile": "aarch64-linux-gnu-",
+      "sourceDateEpoch": 0,
+      "reproducibleFromSource": true,
+      "instructionsUrl": "https://github.com/armbian/build/blob/main/config/optional/boards/aml-s9xx-box/_packages/bsp-cli/boot/build-u-boot/readme.txt",
+      "patchSourceUrl": "https://github.com/armbian/build/blob/main/config/optional/boards/aml-s9xx-box/_packages/bsp-cli/boot/build-u-boot/u-boot-s905x-s912.patch"
+    },
+    "bootloaderGapMiB": 4,
+    "hardwareStatus": "hardware-unverified",
+    "distribution": "trixie",
+    "distributionVersion": "13"
+  },
+  "recipe": {
+    "schemaVersion": 1,
+    "files": {
+      "scripts/build-raw-image.sh": "1111111111111111111111111111111111111111111111111111111111111111",
+      "scripts/validate-raw-image.sh": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  },
+  "sources": {
+    "base": {
+      "name": "Armbian_26.08.0-trunk_trixie_arm64_6.18.38.img.gz",
+      "url": "https://example.invalid/Armbian_26.08.0-trunk_trixie_arm64_6.18.38.img.gz",
+      "digest": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "size": 1024,
+      "armbianVersion": "26.08.0",
+      "release": "Armbian_trixie_arm64_server_2026.07",
+      "repository": "ophub/amlogic-s9xxx-armbian"
+    },
+    "kernel": {
+      "name": "5.10.260.tar.gz",
+      "url": "https://example.invalid/5.10.260.tar.gz",
+      "digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "size": 1024,
+      "version": "5.10.260",
+      "release": "kernel_stable",
+      "repository": "ophub/kernel"
+    },
+    "builder": {
+      "repository": "ophub/amlogic-s9xxx-armbian",
+      "ref": "main",
+      "commit": "cccccccccccccccccccccccccccccccccccccccc",
+      "url": "https://example.invalid/builder/commit"
+    },
+    "ubootSource": {
+      "repository": "u-boot/u-boot",
+      "ref": "v2020.07",
+      "commit": "ffffffffffffffffffffffffffffffffffffffff",
+      "url": "https://example.invalid/upstream-u-boot/commit"
+    },
+    "debian": {
+      "codename": "trixie",
+      "date": "2025-08-09T12:00:00.000Z",
+      "digest": "9999999999999999999999999999999999999999999999999999999999999999",
+      "majorVersion": "13",
+      "sourceUrl": "https://deb.debian.org/debian/dists/stable/InRelease",
+      "suite": "stable",
+      "version": "13.0"
+    }
+  },
+  "fingerprint": "50462081f95f496893147603fca46a9e936ae4907264295313dfdc544bbdf88c"
+}

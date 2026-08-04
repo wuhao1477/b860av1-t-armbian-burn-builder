@@ -1,0 +1,543 @@
+name: Weekly Armbian build
+
+on:
+  schedule:
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even when the resolved fingerprint is unchanged
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: b860av1-t-weekly-build
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    name: Detect upstream changes
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      changed: ${{ steps.compare.outputs.changed }}
+      fingerprint: ${{ steps.resolve.outputs.fingerprint }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Install Debian verification tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes curl debian-archive-keyring gpgv
+      - name: Resolve exact upstream inputs
+        id: resolve
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          scripts/verify-debian-stable.sh debian-stable.json "$RUNNER_TEMP/debian-stable"
+          node scripts/resolve-sources.mjs --output resolved-sources.json --debian-stable debian-stable.json
+          fingerprint=$(node -e "console.log(JSON.parse(require('fs').readFileSync('resolved-sources.json')).fingerprint)")
+          echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+      - name: Audit all public Armbian prereleases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+        run: scripts/audit-public-releases.sh
+      - name: Download the latest validated release state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/previous-release"
+          retry_gh() {
+            local attempt output
+            output=$(mktemp)
+            for attempt in 1 2 3 4 5; do
+              if "$@" >"$output"; then
+                cat "$output"
+                rm -f "$output"
+                return 0
+              fi
+              if (( attempt < 5 )); then
+                sleep $((attempt * 5))
+              fi
+            done
+            rm -f "$output"
+            return 1
+          }
+          latest_tag=$(retry_gh gh release list --limit 50 --exclude-drafts --json tagName,isDraft,isPrerelease --jq '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("armbian-")))] | first | .tagName // empty')
+          if [[ -n "$latest_tag" ]]; then
+            retry_gh gh release view "$latest_tag" --json assets,isDraft,isPrerelease > "$RUNNER_TEMP/previous-release/release-state.json"
+            retry_gh gh release download "$latest_tag" --pattern resolved-sources.json --dir "$RUNNER_TEMP/previous-release" --clobber
+            retry_gh gh release download "$latest_tag" --pattern validation-report.json --dir "$RUNNER_TEMP/previous-release" --clobber
+          fi
+      - name: Compare fingerprints
+        id: compare
+        env:
+          FORCE: ${{ github.event_name == 'workflow_dispatch' && inputs.force || false }}
+          CURRENT_MANIFEST: resolved-sources.json
+          PREVIOUS_MANIFEST: ${{ runner.temp }}/previous-release/resolved-sources.json
+          PREVIOUS_REPORT: ${{ runner.temp }}/previous-release/validation-report.json
+          PREVIOUS_RELEASE_STATE: ${{ runner.temp }}/previous-release/release-state.json
+        run: |
+          set -Eeuo pipefail
+          result=$(node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import {
+            compareFingerprints,
+            validatePublishedState,
+            validateReleaseAssets,
+          } from './src/change-detection.mjs';
+          import { validateManifest } from './src/upstream.mjs';
+
+          const readJson = (path) => JSON.parse(fs.readFileSync(path, 'utf8'));
+          const current = validateManifest(readJson(process.env.CURRENT_MANIFEST));
+          const hasPreviousManifest = fs.existsSync(process.env.PREVIOUS_MANIFEST);
+          const hasPreviousReport = fs.existsSync(process.env.PREVIOUS_REPORT);
+          const hasPreviousReleaseState = fs.existsSync(process.env.PREVIOUS_RELEASE_STATE);
+          if (new Set([hasPreviousManifest, hasPreviousReport, hasPreviousReleaseState]).size !== 1) {
+            throw new Error('previous release state is incomplete');
+          }
+          let previous = null;
+          if (hasPreviousManifest) {
+            const report = readJson(process.env.PREVIOUS_REPORT);
+            previous = validatePublishedState(readJson(process.env.PREVIOUS_MANIFEST), report);
+            validateReleaseAssets(report, readJson(process.env.PREVIOUS_RELEASE_STATE));
+          }
+          const force = process.env.FORCE === 'true';
+          process.stdout.write(JSON.stringify(compareFingerprints(current, previous, force)));
+          NODE
+          )
+          changed=$(node -e "console.log(JSON.parse(process.argv[1]).changed)" "$result")
+          reason=$(node -e "console.log(JSON.parse(process.argv[1]).reason)" "$result")
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "reason=$reason" >> "$GITHUB_STEP_SUMMARY"
+          echo "changed=$changed" >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload resolved manifest
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: resolved-sources
+          path: resolved-sources.json
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
+
+  build:
+    name: Build raw image
+    needs: detect
+    if: >-
+      ${{ needs.detect.outputs.changed == 'true' ||
+          (github.event_name == 'workflow_dispatch' && inputs.force == true) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Download resolved manifest
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: resolved-sources
+      - name: Install Linux image tools
+        run: |
+          set -Eeuo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo apt-get update
+          sudo apt-get install --yes bc bison build-essential curl device-tree-compiler dosfstools e2fsprogs file flex gcc-aarch64-linux-gnu git gzip kpartx libssl-dev make parted proot python3 qemu-user-static swig tar u-boot-tools util-linux xz-utils
+      - name: Build raw image
+        run: scripts/build-raw-image.sh resolved-sources.json out
+      - name: Upload built image
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: b860av1-t-built-${{ needs.detect.outputs.fingerprint }}
+          path: |
+            out/*.img.gz
+            out/SHA256SUMS
+            out/resolved-sources.json
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
+          retention-days: 1
+
+  validate:
+    name: Independently validate raw image
+    needs: [detect, build]
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted validator
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Download built image
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: b860av1-t-built-${{ needs.detect.outputs.fingerprint }}
+          path: out
+      - name: Install Linux validation tools
+        run: |
+          set -Eeuo pipefail
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo swapoff -a 2>/dev/null || true
+          sudo rm -f /swapfile /mnt/swapfile
+          sudo apt-get update
+          sudo apt-get install --yes bc bison build-essential curl device-tree-compiler dosfstools e2fsprogs expect file flex gcc-aarch64-linux-gnu git gzip initramfs-tools-core kmod kpartx libssl-dev make parted proot python3 qemu-system-arm qemu-user-static swig tar u-boot-tools util-linux xz-utils
+      - name: Validate raw image with trusted code
+        env:
+          EXPECTED_FINGERPRINT: ${{ needs.detect.outputs.fingerprint }}
+        run: |
+          set -Eeuo pipefail
+          mapfile -t images < <(find out -maxdepth 1 -type f -name '*.img.gz' -print | sort)
+          [[ ${#images[@]} -eq 1 ]] || { echo "expected one built image, found ${#images[@]}" >&2; exit 1; }
+          image=${images[0]}
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { validateManifest } from './src/upstream.mjs';
+
+          const manifest = validateManifest(JSON.parse(fs.readFileSync('out/resolved-sources.json', 'utf8')));
+          if (manifest.fingerprint !== process.env.EXPECTED_FINGERPRINT) {
+            throw new Error('built manifest fingerprint does not match detector output');
+          }
+          NODE
+          scripts/build-uboot-overload.sh out/resolved-sources.json "$RUNNER_TEMP/uboot-validation"
+          cp "$RUNNER_TEMP/uboot-validation/uboot-build.json" out/uboot-build.json
+          cp "$RUNNER_TEMP/uboot-validation/u-boot-source.tar.gz" out/u-boot-source.tar.gz
+          node scripts/write-build-input-heads.mjs out/resolved-sources.json out/build-input-heads.json
+          sudo env "PATH=$PATH" scripts/validate-raw-image.sh "$image" out/validation-report.json out/resolved-sources.json out/uboot-build.json
+          sudo chown -R "$(id -u):$(id -g)" out
+          image_name=$(basename "$image")
+          (cd out && sha256sum -- "$image_name" > SHA256SUMS)
+          release_tag=$(node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { releaseTagForManifest } from './src/release.mjs';
+          const manifest = JSON.parse(fs.readFileSync('out/resolved-sources.json', 'utf8'));
+          process.stdout.write(releaseTagForManifest(
+            manifest,
+            process.env.GITHUB_RUN_NUMBER,
+            process.env.GITHUB_RUN_ATTEMPT,
+          ));
+          NODE
+          )
+          printf '%s\n' "$release_tag" > out/release-tag.txt
+          node scripts/render-release-notes.mjs out/resolved-sources.json out/validation-report.json out/RELEASE.md "$release_tag"
+          node scripts/validate-candidate-artifacts.mjs out "$EXPECTED_FINGERPRINT"
+      - name: Upload validated candidate artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: b860av1-t-candidate-${{ needs.detect.outputs.fingerprint }}
+          path: |
+            out/*.img.gz
+            out/SHA256SUMS
+            out/resolved-sources.json
+            out/build-input-heads.json
+            out/boot-components.json
+            out/uboot-build.json
+            out/u-boot-source.tar.gz
+            out/source-built-dtb.json
+            out/device-tree-source.dts
+            out/qemu-system-smoke.json
+            out/qemu-system-smoke.log
+            out/rtl8189fs-driver.json
+            out/hardware-capabilities.json
+            out/THIRD_PARTY_SOURCES.md
+            out/filesystem-manifest.sha256
+            out/validation-report.json
+            out/RELEASE.md
+            out/release-tag.txt
+          if-no-files-found: error
+          overwrite: true
+          compression-level: 0
+          retention-days: 14
+
+  publish:
+    name: Publish prerelease
+    needs: [detect, validate]
+    if: ${{ needs.validate.result == 'success' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      prerelease: true
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Download candidate artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: b860av1-t-candidate-${{ needs.detect.outputs.fingerprint }}
+          path: out
+      - name: Create public prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FINGERPRINT: ${{ needs.detect.outputs.fingerprint }}
+        run: |
+          set -Eeuo pipefail
+          node scripts/validate-candidate-artifacts.mjs out "$FINGERPRINT"
+          armbian_version=$(node -e "console.log(JSON.parse(require('fs').readFileSync('out/resolved-sources.json')).sources.base.armbianVersion)")
+          debian_codename=$(node -e "console.log(JSON.parse(require('fs').readFileSync('out/resolved-sources.json')).board.distribution)")
+          debian_point_version=$(node -e "console.log(JSON.parse(require('fs').readFileSync('out/resolved-sources.json')).sources.debian.version)")
+          kernel_version=$(node -e "console.log(JSON.parse(require('fs').readFileSync('out/resolved-sources.json')).sources.kernel.version)")
+          tag=$(<out/release-tag.txt)
+          expected_tag=$(node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { validateReleaseTag } from './src/release.mjs';
+          const manifest = JSON.parse(fs.readFileSync('out/resolved-sources.json', 'utf8'));
+          const tag = fs.readFileSync('out/release-tag.txt', 'utf8').trim();
+          const build = tag.match(/-build-(\d+)\.(\d+)$/);
+          if (!build || build[1] !== process.env.GITHUB_RUN_NUMBER) {
+            throw new Error('candidate release tag is not bound to this workflow run');
+          }
+          process.stdout.write(validateReleaseTag(tag, manifest, Number(build[1]), Number(build[2])));
+          NODE
+          )
+          [[ "$tag" == "$expected_tag" ]]
+          title="Armbian ${armbian_version} / Debian ${debian_point_version} (${debian_codename^}) / kernel ${kernel_version} / build ${tag##*-build-}"
+          draft_release_ready() {
+            gh release edit "$tag" --draft >/dev/null 2>&1 || true
+            if ! gh release view "$tag" --json tagName,isDraft,isPrerelease > out/release-state.json; then
+              return 1
+            fi
+            EXPECTED_TAG="$expected_tag" node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+
+          const release = JSON.parse(fs.readFileSync('out/release-state.json', 'utf8'));
+          if (release.tagName !== process.env.EXPECTED_TAG
+            || release.isDraft !== true
+            || release.isPrerelease !== true) process.exit(1);
+          NODE
+          }
+          release_create_accepted=false
+          release_ready=false
+          for attempt in 1 2 3 4 5; do
+            if draft_release_ready; then
+              release_ready=true
+              break
+            fi
+            if [[ "$release_create_accepted" != true ]] \
+              && gh release create "$tag" --target "$GITHUB_SHA" --title "$title" --notes-file out/RELEASE.md --prerelease --draft; then
+              release_create_accepted=true
+            fi
+            sleep $((attempt * 2))
+          done
+          if [[ "$release_ready" != true ]] && draft_release_ready; then
+            release_ready=true
+          fi
+          [[ "$release_ready" == true ]] || { echo 'draft release did not become readable' >&2; exit 1; }
+          node --input-type=module - <<'NODE'
+          import { createHash } from 'node:crypto';
+          import fs from 'node:fs';
+          import path from 'node:path';
+
+          const fixedNames = [
+            'SHA256SUMS',
+            'resolved-sources.json',
+            'build-input-heads.json',
+            'boot-components.json',
+            'uboot-build.json',
+            'u-boot-source.tar.gz',
+            'source-built-dtb.json',
+            'device-tree-source.dts',
+            'qemu-system-smoke.json',
+            'qemu-system-smoke.log',
+            'rtl8189fs-driver.json',
+            'hardware-capabilities.json',
+            'THIRD_PARTY_SOURCES.md',
+            'filesystem-manifest.sha256',
+            'validation-report.json',
+            'release-tag.txt',
+          ];
+          const imageNames = fs.readdirSync('out').filter((name) => name.endsWith('.img.gz'));
+          if (imageNames.length !== 1) throw new Error('expected exactly one local release image');
+          const digestFor = async (file) => {
+            const hash = createHash('sha256');
+            for await (const chunk of fs.createReadStream(file)) hash.update(chunk);
+            return hash.digest('hex');
+          };
+          const assets = [];
+          for (const name of [...fixedNames, imageNames[0]]) {
+            const file = path.join('out', name);
+            const stat = fs.statSync(file);
+            if (!stat.isFile() || stat.size <= 0) throw new Error(`local release asset is incomplete: ${name}`);
+            assets.push({ name, size: stat.size, digest: await digestFor(file) });
+          }
+          fs.writeFileSync('out/release-assets.json', `${JSON.stringify(assets)}\n`);
+          NODE
+          remote_asset_matches() {
+            local asset_name=$1
+            if ! gh release view "$tag" --json tagName,assets,isDraft,isPrerelease > out/release-state.json; then
+              return 2
+            fi
+            ASSET_NAME="$asset_name" node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+
+          const name = process.env.ASSET_NAME;
+          const localAssets = JSON.parse(fs.readFileSync('out/release-assets.json', 'utf8'));
+          const local = localAssets.find((asset) => asset.name === name);
+          const release = JSON.parse(fs.readFileSync('out/release-state.json', 'utf8'));
+          const remote = release.assets?.find((asset) => asset.name === name);
+          const remoteDigest = typeof remote?.digest === 'string'
+            ? remote.digest.replace(/^sha256:/i, '').toLowerCase()
+            : '';
+          if (!local || remote?.state !== 'uploaded'
+            || remote.size !== local.size) process.exit(1);
+          if (remoteDigest === '') process.exit(2);
+          if (remoteDigest !== local.digest) process.exit(1);
+          NODE
+          }
+          image_path=$(find out -maxdepth 1 -type f -name '*.img.gz' -print -quit)
+          [[ -n "$image_path" ]] || { echo 'release image path is missing' >&2; exit 1; }
+          asset_paths=(
+            out/SHA256SUMS
+            out/resolved-sources.json
+            out/build-input-heads.json
+            out/boot-components.json
+            out/uboot-build.json
+            out/u-boot-source.tar.gz
+            out/source-built-dtb.json
+            out/device-tree-source.dts
+            out/qemu-system-smoke.json
+            out/qemu-system-smoke.log
+            out/rtl8189fs-driver.json
+            out/hardware-capabilities.json
+            out/THIRD_PARTY_SOURCES.md
+            out/filesystem-manifest.sha256
+            out/validation-report.json
+            out/release-tag.txt
+            "$image_path"
+          )
+          for asset_path in "${asset_paths[@]}"; do
+            asset_name=$(basename "$asset_path")
+            asset_ready=false
+            for attempt in 1 2 3 4 5; do
+              match_status=0
+              remote_asset_matches "$asset_name" || match_status=$?
+              if (( match_status == 0 )); then
+                asset_ready=true
+                break
+              fi
+              if (( match_status == 2 )); then
+                (( attempt < 5 )) && sleep $((attempt * 2))
+                continue
+              fi
+              gh release upload "$tag" "$asset_path" --clobber || true
+              (( attempt < 5 )) && sleep $((attempt * 2))
+            done
+            if [[ "$asset_ready" != true ]]; then
+              match_status=0
+              remote_asset_matches "$asset_name" || match_status=$?
+              (( match_status == 0 )) && asset_ready=true
+            fi
+            [[ "$asset_ready" == true ]] || {
+              echo "release asset did not become consistent: $asset_name" >&2
+              exit 1
+            }
+          done
+          release_assets_verified=false
+          for attempt in 1 2 3 4 5; do
+            if ! gh release view "$tag" --json tagName,assets,isDraft,isPrerelease > out/release-state.json; then
+              (( attempt < 5 )) && sleep $((attempt * 2))
+              continue
+            fi
+            if EXPECTED_TAG="$expected_tag" node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { validateDraftReleaseForPublication } from './src/change-detection.mjs';
+
+          const manifest = JSON.parse(fs.readFileSync('out/resolved-sources.json', 'utf8'));
+          const report = JSON.parse(fs.readFileSync('out/validation-report.json', 'utf8'));
+          const release = JSON.parse(fs.readFileSync('out/release-state.json', 'utf8'));
+          const tagText = fs.readFileSync('out/release-tag.txt', 'utf8');
+          const localAssets = JSON.parse(fs.readFileSync('out/release-assets.json', 'utf8'));
+          validateDraftReleaseForPublication(
+            manifest,
+            report,
+            release,
+            process.env.EXPECTED_TAG,
+            tagText,
+            localAssets,
+          );
+          NODE
+            then
+              release_assets_verified=true
+              break
+            fi
+            (( attempt < 5 )) && sleep $((attempt * 2))
+          done
+          [[ "$release_assets_verified" == true ]] || { echo 'release assets did not become consistent' >&2; exit 1; }
+          published_release_ready() {
+            if ! gh release view "$tag" --json tagName,isDraft,isPrerelease > out/release-state.json; then
+              return 1
+            fi
+            EXPECTED_TAG="$expected_tag" node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+
+          const release = JSON.parse(fs.readFileSync('out/release-state.json', 'utf8'));
+          if (release.tagName !== process.env.EXPECTED_TAG
+            || release.isDraft !== false
+            || release.isPrerelease !== true) process.exit(1);
+          NODE
+          }
+          release_published=false
+          for attempt in 1 2 3 4 5; do
+            gh release edit "$tag" --title "$title" --notes-file out/RELEASE.md --prerelease --draft=false || true
+            if published_release_ready; then
+              release_published=true
+              break
+            fi
+            sleep $((attempt * 2))
+          done
+          if [[ "$release_published" != true ]] && published_release_ready; then
+            release_published=true
+          fi
+          [[ "$release_published" == true ]] || { echo 'published release state was not confirmed' >&2; exit 1; }
+
+  keepalive:
+    name: Keep scheduled workflow active
+    needs: [detect, build, validate, publish]
+    if: ${{ always() && github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Check out the current default branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Refresh the 42-day heartbeat when needed
+        run: |
+          set -Eeuo pipefail
+          heartbeat=.github/schedule-heartbeat
+          now=$(date -u +%s)
+          last=$(awk -F= '$1 == "last_checked" {print $2}' "$heartbeat" 2>/dev/null || true)
+          [[ "$last" =~ ^[0-9]+$ ]] || last=0
+          (( now - last < 42 * 86400 )) && exit 0
+          printf '%s\n' '# Updated by the scheduled workflow; intentionally excluded from the build fingerprint.' "last_checked=$now" > "$heartbeat"
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$heartbeat"
+          git -c commit.gpgsign=false commit -m 'chore(ops): 更新计划任务心跳'
+          git push origin HEAD:main

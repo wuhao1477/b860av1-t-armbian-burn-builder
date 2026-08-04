@@ -1,0 +1,14 @@
+{
+  "board": "ZXV10 B860AV1.1-T",
+  "soc": "Amlogic S905L / P212",
+  "status": "hardware-unverified",
+  "files": {
+    "DDR.USB": "0ed67a2ee15629eb4af16b41d2908816d3a4fe7ca591bcec7756fb56afc26417",
+    "UBOOT.USB": "93b963251ed4ac7395ec5e918ef0526f533cebba0646fd8fb2d85d3499106647",
+    "aml_sdc_burn.UBOOT": "bda33b05ffa68025cfad343469df0f77624d0bc1252a1853c20346e8160ed36b",
+    "aml_sdc_burn.ini": "e8d93f46803e26ce8457f902edd348806cbb88c8ef706deea2eb441879f0a5cc",
+    "platform.conf": "89202ec0a07edd091b8aba6589bb1d40471bfde8752d7bc2611b0b1ceba7110fbcb5a368965be1957",
+    "bootloader.PARTITION": "50b0fb65121e6a7e174f11f556e03d80532feccac747b4f4a646af5bde7f8ba8",
+    "meson1.dtb": "1a859e2c88057cf908cd20939dec88f93978d59a17ee2633eb3a991adf4e56e4"
+  }
+}

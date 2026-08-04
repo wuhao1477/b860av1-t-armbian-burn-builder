@@ -1,0 +1,115 @@
+name: Verify and publish device evidence
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing Armbian prerelease tag
+        required: true
+        type: string
+      evidence_path:
+        description: Repository path containing device-validation.json and device-serial.log
+        required: true
+        type: string
+      confirmation:
+        description: Type verify to enable the publication job
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate device evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Require explicit confirmation
+        if: ${{ inputs.confirmation != 'verify' }}
+        run: |
+          echo 'confirmation must equal verify' >&2
+          exit 1
+      - name: Check out full history
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          fetch-depth: 0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Install GitHub CLI
+        run: sudo apt-get update && sudo apt-get install --yes gh
+      - name: Download exact Release assets before validation
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          mkdir -p "$RUNNER_TEMP/release-assets"
+          gh release view "$RELEASE_TAG" --json tagName,isDraft,isPrerelease,assets > "$RUNNER_TEMP/release-assets/release.json"
+          for asset in SHA256SUMS build-input-heads.json release-tag.txt resolved-sources.json validation-report.json filesystem-manifest.sha256 boot-components.json; do
+            gh release download "$RELEASE_TAG" --pattern "$asset" --dir "$RUNNER_TEMP/release-assets"
+          done
+      - name: Validate exact evidence path
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          EVIDENCE_PATH: ${{ inputs.evidence_path }}
+        run: |
+          set -Eeuo pipefail
+          test -f "$EVIDENCE_PATH/device-validation.json"
+          test -f "$EVIDENCE_PATH/device-serial.log"
+          node scripts/validate-device-evidence.mjs \
+            "$EVIDENCE_PATH" "$RUNNER_TEMP/release-assets" "$GITHUB_WORKSPACE" "$RUNNER_TEMP/device-validation-summary.json"
+          node scripts/render-device-validation-summary.mjs \
+            "$RUNNER_TEMP/device-validation-summary.json" "$RUNNER_TEMP/device-validation.md"
+          EVIDENCE_ID=$(node -e "console.log(JSON.parse(require('fs').readFileSync(process.argv[1])).evidenceId)" "$EVIDENCE_PATH/device-validation.json")
+          mkdir -p "$RUNNER_TEMP/validated-evidence"
+          cp "$EVIDENCE_PATH/device-validation.json" "$RUNNER_TEMP/validated-evidence/device-validation-$EVIDENCE_ID.json"
+          cp "$EVIDENCE_PATH/device-serial.log" "$RUNNER_TEMP/validated-evidence/device-serial-$EVIDENCE_ID.log"
+          cp "$RUNNER_TEMP/device-validation.md" "$RUNNER_TEMP/validated-evidence/device-validation-$EVIDENCE_ID.md"
+          (cd "$RUNNER_TEMP/validated-evidence" && sha256sum -- * > artifact-manifest.sha256)
+          printf '%s\n' "$EVIDENCE_ID" > "$RUNNER_TEMP/validated-evidence/evidence-id"
+      - name: Upload validated evidence handoff
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: validated-device-evidence
+          path: ${{ runner.temp }}/validated-evidence
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish unique evidence assets
+    needs: validate
+    if: ${{ needs.validate.result == 'success' && inputs.confirmation == 'verify' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Download validated handoff
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: validated-device-evidence
+          path: ${{ runner.temp }}/validated-evidence
+      - name: Verify handoff digests and target names
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          cd "$RUNNER_TEMP/validated-evidence"
+          sha256sum --check artifact-manifest.sha256
+          evidence_id=$(cat evidence-id)
+          json="device-validation-$evidence_id.json"
+          serial="device-serial-$evidence_id.log"
+          markdown="device-validation-$evidence_id.md"
+          [[ "$evidence_id" =~ ^[0-9a-f]{16}$ ]]
+          remote=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name')
+          for name in "$json" "$serial" "$markdown"; do
+            if printf '%s\n' "$remote" | grep -Fxq "$name"; then
+              echo "Release asset already exists: $name" >&2
+              exit 1
+            fi
+          done
+          gh release upload "$RELEASE_TAG" "$json" "$serial" "$markdown"

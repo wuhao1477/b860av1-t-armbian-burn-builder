@@ -1,0 +1,124 @@
+name: Weekly B860 burn image
+
+on:
+  schedule:
+    - cron: '23 3 * * 1'
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Rebuild even when the public input fingerprint is unchanged
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: b860-burn-weekly
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-24.04
+    outputs:
+      changed: ${{ steps.resolve.outputs.changed }}
+      asset_url: ${{ steps.resolve.outputs.asset_url }}
+      asset_name: ${{ steps.resolve.outputs.asset_name }}
+      asset_digest: ${{ steps.resolve.outputs.asset_digest }}
+      release_tag: ${{ steps.resolve.outputs.release_tag }}
+      fingerprint: ${{ steps.resolve.outputs.fingerprint }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FORCE: ${{ inputs.force || false }}
+        run: |
+          set -Eeuo pipefail
+          current=$(gh api repos/wuhao1477/b860av1-t-armbian-builder/releases --paginate --jq '[.[] | select(.draft == false and .prerelease == true and (.tag_name | startswith("armbian-")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]')
+          release_tag=$(jq -r '.tag_name' <<<"$current")
+          asset=$(jq -c '[.assets[] | select(.name | test("^Armbian_.*\\.img\\.gz$"))] | .[0]' <<<"$current")
+          [[ "$asset" != null ]] || { echo 'latest public B860 release has no raw image' >&2; exit 1; }
+          asset_name=$(jq -r '.name' <<<"$asset")
+          asset_url=$(jq -r '.browser_download_url' <<<"$asset")
+          asset_digest=$(jq -r '.digest' <<<"$asset" | sed 's/^sha256://')
+          [[ "$asset_digest" =~ ^[0-9a-f]{64}$ ]] || { echo 'public asset has no sha256 digest' >&2; exit 1; }
+          fingerprint=$(printf '%s\n%s\n%s\n' "$release_tag" "$asset_name" "$asset_digest" | sha256sum | awk '{print $1}')
+          previous=$(gh release list --limit 50 --json tagName,isDraft,isPrerelease --jq '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("b860-burn-")))] | first | .tagName // empty')
+          old=''
+          if [[ -n "$previous" ]]; then old=$(gh release view "$previous" --json body --jq '.body' | sed -n 's/^Input fingerprint: //p' | head -n1); fi
+          changed=true
+          [[ "$FORCE" == true || "$fingerprint" != "$old" ]] || changed=false
+          {
+            echo "changed=$changed"
+            echo "asset_url=$asset_url"
+            echo "asset_name=$asset_name"
+            echo "asset_digest=$asset_digest"
+            echo "release_tag=$release_tag"
+            echo "fingerprint=$fingerprint"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: detect
+    if: ${{ needs.detect.outputs.changed == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Install image tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes curl e2fsprogs file gzip git kpartx util-linux
+      - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
+        with:
+          toolchain: stable
+      - name: Download public raw image
+        env:
+          URL: ${{ needs.detect.outputs.asset_url }}
+          DIGEST: ${{ needs.detect.outputs.asset_digest }}
+          NAME: ${{ needs.detect.outputs.asset_name }}
+        run: |
+          set -Eeuo pipefail
+          curl --fail --location --retry 5 --output "$NAME" "$URL"
+          printf '%s  %s\n' "$DIGEST" "$NAME" | sha256sum --check --status
+      - name: Build Amlogic v2 burn image
+        run: scripts/build-burn-image.sh "${{ needs.detect.outputs.asset_name }}" out
+      - name: Independently validate container
+        run: scripts/validate-burn-image.sh out/burn.img
+      - name: Write release metadata
+        env:
+          INPUT_FINGERPRINT: ${{ needs.detect.outputs.fingerprint }}
+          PUBLIC_RELEASE: ${{ needs.detect.outputs.release_tag }}
+        run: |
+          set -Eeuo pipefail
+          printf 'Input fingerprint: %s\nPublic release: %s\nStatus: format-valid / hardware-unverified\n' \
+            "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" > out/RELEASE.md
+          sha256sum out/burn.img > out/SHA256SUMS
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: b860-burn-output
+          path: out
+          retention-days: 1
+
+  publish:
+    needs: [detect, build]
+    if: ${{ needs.build.result == 'success' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: b860-burn-output
+          path: out
+      - name: Publish private prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PUBLIC_RELEASE: ${{ needs.detect.outputs.release_tag }}
+          RUN_NUMBER: ${{ github.run_number }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          FINGERPRINT: ${{ needs.detect.outputs.fingerprint }}
+        run: |
+          set -Eeuo pipefail
+          tag="b860-burn-${PUBLIC_RELEASE#Armbian_}-build-${RUN_NUMBER}.${RUN_ATTEMPT}"
+          gh release create "$tag" out/burn.img out/SHA256SUMS out/burn-report.json out/RELEASE.md \
+            --repo "$GITHUB_REPOSITORY" --prerelease --title "$tag" --notes "Input fingerprint: $FINGERPRINT\nPublic release: $PUBLIC_RELEASE\nStatus: format-valid / hardware-unverified"

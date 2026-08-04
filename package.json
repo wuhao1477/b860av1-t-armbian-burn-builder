@@ -1,0 +1,17 @@
+{
+  "name": "b860av1-t-armbian-builder",
+  "version": "0.1.0",
+  "description": "Reproducible GitHub Actions builds of Debian Trixie Armbian candidates for ZTE B860AV1.1-T",
+  "private": true,
+  "license": "MIT",
+  "repository": "github:wuhao1477/b860av1-t-armbian-builder",
+  "packageManager": "pnpm@11.6.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "check": "pnpm test && bash -n scripts/*.sh"
+  }
+}

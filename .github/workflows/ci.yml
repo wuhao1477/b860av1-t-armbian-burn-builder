@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    paths-ignore:
+      - '.github/schedule-heartbeat'
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Enable pnpm
+        run: corepack enable
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Install native validation tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes expect device-tree-compiler
+      - name: Run tests
+        run: pnpm test
+      - name: Check shell syntax
+        run: bash -n scripts/*.sh
+      - name: Enforce source-only repository policy
+        run: node --input-type=module -e "import { inspectTrackedFiles } from './src/repository-policy.mjs'; const violations = inspectTrackedFiles(new URL('.', import.meta.url)); if (violations.length) { console.error(violations.join('\\n')); process.exit(1); }"
+
+  source-built-uboot:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
+      - name: Install U-Boot build tools
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          sudo apt-get install --yes bc bison build-essential curl device-tree-compiler flex gcc-aarch64-linux-gnu git libssl-dev make python3 swig
+      - name: Resolve fixed U-Boot source manifest
+        run: |
+          set -Eeuo pipefail
+          commit=$(git ls-remote https://github.com/u-boot/u-boot.git 'refs/tags/v2020.07^{}' | awk '{print $1}')
+          [[ "$commit" == 2f5fbb5b39f7b67044dda5c35e4a4b31685a3109 ]]
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+          import { buildManifest } from './src/upstream.mjs';
+
+          const board = JSON.parse(fs.readFileSync('config/board.json', 'utf8'));
+          fs.writeFileSync('uboot-ci-manifest.json', `${JSON.stringify(buildManifest({
+            schemaVersion: 4,
+            board: { ...board, distribution: 'trixie', distributionVersion: '13' },
+            recipe: { schemaVersion: 1, files: { fixture: '0'.repeat(64) } },
+            sources: {
+              base: { name: 'Armbian_test.img.gz', url: 'https://example.invalid/base', digest: '1'.repeat(64), size: 1, armbianVersion: '1.0.0' },
+              kernel: { name: '5.10.1.tar.gz', url: 'https://example.invalid/kernel', digest: '2'.repeat(64), size: 1, version: '5.10.1' },
+              builder: { repository: 'ophub/amlogic-s9xxx-armbian', commit: '3'.repeat(40) },
+              ubootSource: { repository: 'u-boot/u-boot', ref: 'v2020.07', commit: '2f5fbb5b39f7b67044dda5c35e4a4b31685a3109' },
+              debian: { codename: 'trixie', date: '2025-08-09T12:00:00.000Z', digest: '6'.repeat(64), majorVersion: '13', sourceUrl: 'https://deb.debian.org/debian/dists/stable/InRelease', suite: 'stable', version: '13.0' },
+            },
+          }), null, 2)}\n`);
+          NODE
+      - name: Compile twice and compare
+        run: |
+          set -Eeuo pipefail
+          scripts/build-uboot-overload.sh uboot-ci-manifest.json "$RUNNER_TEMP/uboot-first"
+          scripts/build-uboot-overload.sh uboot-ci-manifest.json "$RUNNER_TEMP/uboot-second"
+          cmp "$RUNNER_TEMP/uboot-first/u-boot-s905x-s912.bin" "$RUNNER_TEMP/uboot-second/u-boot-s905x-s912.bin"
+          cmp "$RUNNER_TEMP/uboot-first/uboot-build.json" "$RUNNER_TEMP/uboot-second/uboot-build.json"
+          cmp "$RUNNER_TEMP/uboot-first/u-boot-source.tar.gz" "$RUNNER_TEMP/uboot-second/u-boot-source.tar.gz"
+      - name: Resolve fixed repair DTB manifest
+        run: |
+          set -Eeuo pipefail
+          node --input-type=module - <<'NODE'
+          import fs from 'node:fs';
+
+          const board = JSON.parse(fs.readFileSync('config/board.json', 'utf8'));
+          fs.writeFileSync('dtb-ci-manifest.json', `${JSON.stringify({ schemaVersion: 5, board }, null, 2)}\n`);
+          NODE
+      - name: Compile repair DTB twice and compare
+        run: |
+          set -Eeuo pipefail
+          scripts/build-board-dtb.sh dtb-ci-manifest.json "$RUNNER_TEMP/dtb-first"
+          scripts/build-board-dtb.sh dtb-ci-manifest.json "$RUNNER_TEMP/dtb-second"
+          cmp "$RUNNER_TEMP/dtb-first/meson-gxl-s905x-p212-b860av11t.dtb" "$RUNNER_TEMP/dtb-second/meson-gxl-s905x-p212-b860av11t.dtb"
+          cmp "$RUNNER_TEMP/dtb-first/source-built-dtb.json" "$RUNNER_TEMP/dtb-second/source-built-dtb.json"
+          cmp "$RUNNER_TEMP/dtb-first/device-tree-source.dts" "$RUNNER_TEMP/dtb-second/device-tree-source.dts"

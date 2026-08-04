@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 5,
+  "base": {
+    "repository": "ophub/amlogic-s9xxx-armbian"
+  },
+  "kernel": {
+    "repository": "ophub/kernel",
+    "releaseTag": "kernel_stable",
+    "assetPattern": "^5\\.10\\.[0-9]+\\.tar\\.gz$"
+  },
+  "builder": {
+    "repository": "ophub/amlogic-s9xxx-armbian",
+    "ref": "main"
+  },
+  "ubootSource": {
+    "repository": "u-boot/u-boot",
+    "ref": "v2020.07"
+  }
+}
