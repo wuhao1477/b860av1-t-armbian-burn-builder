@@ -36,7 +36,7 @@ jobs:
           FORCE: ${{ inputs.force || false }}
         run: |
           set -Eeuo pipefail
-          current=$(gh api repos/wuhao1477/b860av1-t-armbian-builder/releases --paginate --jq '[.[] | select(.draft == false and .prerelease == true and (.tag_name | startswith("armbian-")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]')
+          current=$(gh api repos/wuhao1477/b860av1-t-armbian-builder/releases --paginate --jq '[.[] | select(.draft == false and (.tag_name | startswith("armbian-")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]')
           release_tag=$(jq -r '.tag_name' <<<"$current")
           asset=$(jq -c '[.assets[] | select(.name | test("^Armbian_.*\\.img\\.gz$"))] | .[0]' <<<"$current")
           [[ "$asset" != null ]] || { echo 'latest public B860 release has no raw image' >&2; exit 1; }
