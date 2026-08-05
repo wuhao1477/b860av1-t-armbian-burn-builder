@@ -13,9 +13,10 @@ mapfile -t parts < <(lsblk --noheadings --list --output NAME,TYPE "$loop" | awk 
 [[ ${#parts[@]} -ge 2 ]] || { echo 'raw image must have boot and root partitions' >&2; exit 1; }
 boot_part=${parts[0]}; root_part=${parts[1]}; mkdir -p "$boot_mount" "$root_mount"
 sudo mount -o ro "$boot_part" "$boot_mount"; sudo mount -o rw "$root_part" "$root_mount"
-kernel=$(find "$boot_mount" -type f \( -name 'Image.gz' -o -name 'Image' -o -name 'zImage' \) | sort | head -n1); initrd=$(find "$boot_mount" -type f -name 'initrd*' | sort | head -n1); dtb=$(find "$boot_mount" -type f \( -name 'meson-gxl-s905x-p212-b860av11t.dtb' -o -name 'meson-gxl-s905x-p212.dtb' \) | sort | head -n1)
+mapfile -t kernel_candidates < <(find "$boot_mount" -type f \( -name 'Image.gz' -o -name 'Image' -o -name 'zImage' \))
+kernel=$(node "$root/scripts/burn-image.mjs" select-kernel "${kernel_candidates[@]}"); initrd=$(find "$boot_mount" -type f -name 'initrd*' | sort | head -n1); dtb=$(find "$boot_mount" -type f \( -name 'meson-gxl-s905x-p212-b860av11t.dtb' -o -name 'meson-gxl-s905x-p212.dtb' \) | sort | head -n1)
 [[ -n "$kernel" && -n "$initrd" && -n "$dtb" ]] || { echo 'boot partition lacks Image, initrd, or p212 DTB' >&2; exit 1; }
-cp "$kernel" "$tmp/kernel"; cp "$initrd" "$tmp/initrd"; cp "$dtb" "$tmp/dtb"
+node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/kernel"; cp "$initrd" "$tmp/initrd"; cp "$dtb" "$tmp/dtb"
 sudo sed -i '/^[[:space:]]*LABEL=BOOT[[:space:]]/d' "$root_mount/etc/fstab" 2>/dev/null || true
 sudo umount "$boot_mount" "$root_mount"; root_size=$(sudo blockdev --getsize64 "$root_part"); sudo e2fsck -pf "$root_part" || true
 package="$tmp/package"; mkdir -p "$package"

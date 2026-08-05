@@ -1,9 +1,37 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import { basename } from 'node:path';
+import { gzipSync } from 'node:zlib';
+
+const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
 
 function fail(message) { throw new Error(message); }
 function u32(buffer, offset, value) { buffer.writeUInt32LE(value >>> 0, offset); }
+
+export function selectKernelPath(paths) {
+  for (const name of ['Image.gz', 'zImage', 'Image']) {
+    const matches = paths.filter((candidate) => basename(candidate) === name).sort();
+    if (matches.length > 0) return matches[0];
+  }
+  fail('boot partition lacks Image.gz, zImage, or Image');
+}
+
+export function assertBootPartitionSize(size) {
+  if (!Number.isSafeInteger(size) || size <= 0) fail('boot image size is invalid');
+  if (size > BOOT_PARTITION_BYTES) {
+    fail(`boot image size ${size} exceeds the stock ${BOOT_PARTITION_BYTES}-byte boot partition`);
+  }
+  return size;
+}
+
+export function prepareBootKernel(inputPath, outputPath) {
+  const input = fs.readFileSync(inputPath);
+  const alreadyCompressed = input[0] === 0x1f && input[1] === 0x8b;
+  const output = alreadyCompressed ? input : gzipSync(input, { level: 9, mtime: 0 });
+  fs.writeFileSync(outputPath, output);
+  return { compressed: !alreadyCompressed, size: output.length };
+}
 
 export function makeBoot(kernelPath, ramdiskPath, dtbPath, outputPath, cmdline) {
   const page = 2048;
@@ -27,6 +55,8 @@ export function makeBoot(kernelPath, ramdiskPath, dtbPath, outputPath, cmdline) 
     chunks.push(part); const pad = (page - (part.length % page)) % page;
     if (pad) chunks.push(Buffer.alloc(pad));
   }
+  const totalSize = chunks.reduce((sum, part) => sum + part.length, 0);
+  assertBootPartitionSize(totalSize);
   fs.writeFileSync(outputPath, Buffer.concat(chunks));
   return { size: fs.statSync(outputPath).size, kernel: kernel.length, ramdisk: ramdisk.length, dtb: dtb.length, cmdline: command.length };
 }
@@ -56,5 +86,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   const [, , command, ...args] = process.argv;
   if (command === 'boot' && args.length === 5) console.log(JSON.stringify(makeBoot(...args)));
   else if (command === 'sparse' && args.length === 3) console.log(JSON.stringify(makeSparse(args[0], args[1], Number(args[2]))));
-  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | sparse input output length');
+  else if (command === 'select-kernel' && args.length > 0) console.log(selectKernelPath(args));
+  else if (command === 'prepare-kernel' && args.length === 2) console.log(JSON.stringify(prepareBootKernel(...args)));
+  else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
+  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }
