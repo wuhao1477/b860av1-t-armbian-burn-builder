@@ -5,9 +5,118 @@ import { basename } from 'node:path';
 import { gzipSync } from 'node:zlib';
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
+const AML_DTB_PAGE_BYTES = 2048;
+const P212_DTB_TARGETS = ['gxl_p212_1g', 'gxl_p212_2g'];
 
 function fail(message) { throw new Error(message); }
 function u32(buffer, offset, value) { buffer.writeUInt32LE(value >>> 0, offset); }
+
+function align(value, boundary) {
+  return Math.ceil(value / boundary) * boundary;
+}
+
+function encodeAmlogicDtbProperty(value) {
+  if (!/^[a-z0-9]+$/.test(value) || value.length > 16) fail(`invalid Amlogic DTB property: ${value}`);
+  const plain = Buffer.alloc(16, 0x20);
+  plain.write(value, 0, 'ascii');
+  const encoded = Buffer.alloc(16);
+  for (let offset = 0; offset < plain.length; offset += 4) {
+    for (let index = 0; index < 4; index += 1) encoded[offset + index] = plain[offset + 3 - index];
+  }
+  return encoded;
+}
+
+export function createP212MultiDtb(dtb) {
+  if (!Buffer.isBuffer(dtb) || dtb.length < 8 || dtb.readUInt32BE(0) !== 0xd00dfeed) {
+    fail('input is not a flattened device tree');
+  }
+  const fdtSize = dtb.readUInt32BE(4);
+  if (fdtSize < 8 || fdtSize > dtb.length) fail('flattened device tree size is invalid');
+  const entryBytes = 56;
+  const headerBytes = align(12 + (entryBytes * P212_DTB_TARGETS.length), AML_DTB_PAGE_BYTES);
+  const payloadBytes = align(dtb.length, AML_DTB_PAGE_BYTES);
+  const output = Buffer.alloc(headerBytes + (payloadBytes * P212_DTB_TARGETS.length));
+  output.write('AML_', 0, 'ascii');
+  u32(output, 4, 2);
+  u32(output, 8, P212_DTB_TARGETS.length);
+  P212_DTB_TARGETS.forEach((target, index) => {
+    const entryOffset = 12 + (index * entryBytes);
+    target.split('_').forEach((property, propertyIndex) => {
+      encodeAmlogicDtbProperty(property).copy(output, entryOffset + (propertyIndex * 16));
+    });
+    u32(output, entryOffset + 48, headerBytes + (index * payloadBytes));
+    u32(output, entryOffset + 52, payloadBytes);
+    dtb.copy(output, headerBytes + (index * payloadBytes));
+  });
+  return output;
+}
+
+export function writeP212MultiDtb(inputPath, outputPath) {
+  const output = createP212MultiDtb(fs.readFileSync(inputPath));
+  fs.writeFileSync(outputPath, output);
+  return { size: output.length, targets: P212_DTB_TARGETS };
+}
+
+function decodeAmlogicDtbProperty(image, offset) {
+  const decoded = Buffer.alloc(16);
+  for (let group = 0; group < decoded.length; group += 4) {
+    for (let index = 0; index < 4; index += 1) decoded[group + index] = image[offset + group + 3 - index];
+  }
+  return decoded.toString('ascii').replace(/ +$/u, '');
+}
+
+export function inspectP212MultiDtb(image) {
+  if (!Buffer.isBuffer(image) || image.length < AML_DTB_PAGE_BYTES
+      || image.toString('ascii', 0, 4) !== 'AML_'
+      || image.readUInt32LE(4) !== 2 || image.readUInt32LE(8) !== 2) {
+    fail('P212 multi-DTB header is invalid');
+  }
+  const targets = [];
+  const entries = [];
+  const payloads = [];
+  for (let index = 0; index < P212_DTB_TARGETS.length; index += 1) {
+    const entry = 12 + (index * 56);
+    const target = [0, 16, 32].map((delta) => decodeAmlogicDtbProperty(image, entry + delta)).join('_');
+    const offset = image.readUInt32LE(entry + 48);
+    const size = image.readUInt32LE(entry + 52);
+    const expectedOffset = index === 0
+      ? AML_DTB_PAGE_BYTES
+      : entries[index - 1].offset + entries[index - 1].size;
+    if (target !== P212_DTB_TARGETS[index] || offset !== expectedOffset
+        || size === 0 || size % AML_DTB_PAGE_BYTES !== 0 || offset + size > image.length) {
+      fail('P212 multi-DTB entry is invalid');
+    }
+    if (image.readUInt32BE(offset) !== 0xd00dfeed) fail('P212 multi-DTB payload is not an FDT');
+    const fdtSize = image.readUInt32BE(offset + 4);
+    if (fdtSize < 8 || fdtSize > size) fail('P212 multi-DTB FDT size is invalid');
+    targets.push(target);
+    entries.push({ offset, size });
+    payloads.push(image.subarray(offset, offset + fdtSize));
+  }
+  if (entries[0].size !== entries[1].size
+      || image.length !== entries[1].offset + entries[1].size
+      || !payloads[0].equals(payloads[1])) fail('P212 multi-DTB payload copies differ');
+  return { size: image.length, targets, fdtSize: payloads[0].length };
+}
+
+function extractBootSecond(image) {
+  if (image.length < AML_DTB_PAGE_BYTES || image.toString('ascii', 0, 8) !== 'ANDROID!') {
+    fail('boot partition is not Android boot v0');
+  }
+  const page = image.readUInt32LE(36);
+  if (page !== AML_DTB_PAGE_BYTES) fail('boot partition page size is not 2048');
+  const offset = page + align(image.readUInt32LE(8), page) + align(image.readUInt32LE(16), page);
+  const size = image.readUInt32LE(24);
+  if (size === 0 || offset + size > image.length) fail('boot partition second payload is invalid');
+  return image.subarray(offset, offset + size);
+}
+
+export function validateP212DtbPair(bootPath, standalonePath) {
+  const second = extractBootSecond(fs.readFileSync(bootPath));
+  const standalone = fs.readFileSync(standalonePath);
+  if (!second.equals(standalone)) fail('boot second and meson1.dtb differ');
+  return inspectP212MultiDtb(second);
+}
 
 export function selectKernelPath(paths) {
   for (const name of ['Image.gz', 'zImage', 'Image']) {
@@ -37,7 +146,7 @@ export function makeBoot(kernelPath, ramdiskPath, dtbPath, outputPath, cmdline) 
   const page = 2048;
   const kernel = fs.readFileSync(kernelPath);
   const ramdisk = fs.readFileSync(ramdiskPath);
-  const dtb = fs.readFileSync(dtbPath);
+  const dtb = createP212MultiDtb(fs.readFileSync(dtbPath));
   const command = Buffer.from(cmdline, 'ascii');
   if (command.length > 512) fail('Android boot v0 command line exceeds 512 bytes');
   const header = Buffer.alloc(page);
@@ -88,6 +197,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'sparse' && args.length === 3) console.log(JSON.stringify(makeSparse(args[0], args[1], Number(args[2]))));
   else if (command === 'select-kernel' && args.length > 0) console.log(selectKernelPath(args));
   else if (command === 'prepare-kernel' && args.length === 2) console.log(JSON.stringify(prepareBootKernel(...args)));
+  else if (command === 'multi-dtb' && args.length === 2) console.log(JSON.stringify(writeP212MultiDtb(...args)));
+  else if (command === 'check-p212-dtbs' && args.length === 2) console.log(JSON.stringify(validateP212DtbPair(...args)));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | multi-dtb input output | check-p212-dtbs boot meson1 | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }
