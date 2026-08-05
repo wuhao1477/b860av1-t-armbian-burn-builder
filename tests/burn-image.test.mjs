@@ -80,6 +80,20 @@ test('kernel selection prefers Image.gz over an uncompressed Image', (context) =
   assert.equal(burnImage.selectKernelPath([image, imageGz]), imageGz);
 });
 
+test('direct eMMC boot command line caps RAM to the board limit', () => {
+  assert.equal(
+    typeof burnImage.createBootCommandLine,
+    'function',
+    'missing direct-boot command-line builder',
+  );
+
+  const tokens = burnImage.createBootCommandLine(1024).split(/\s+/);
+
+  assert.equal(tokens.filter((token) => /^mem=/.test(token)).length, 1);
+  assert.ok(tokens.includes('mem=1024M'));
+  assert.ok(tokens.includes('root=LABEL=ROOTFS'));
+});
+
 test('boot kernel preparation compresses an uncompressed ARM64 Image', (context) => {
   const directory = fixture(context);
   const input = path.join(directory, 'zImage');

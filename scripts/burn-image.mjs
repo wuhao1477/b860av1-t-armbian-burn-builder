@@ -7,6 +7,7 @@ import { gzipSync } from 'node:zlib';
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
 const AML_DTB_PAGE_BYTES = 2048;
 const P212_DTB_TARGETS = ['gxl_p212_1g', 'gxl_p212_2g'];
+const BURN_PARTITION_ARGUMENT = 'blkdevparts=mmcblk2:4M@0(bootloader),64M@36M(reserved),768M@108M(cache),8M@884M(env),4M@900M(conf),32M@912M(logo),32M@952M(recovery),8M@992M(rsv),8M@1008M(tee),32M@1024M(crypt),32M@1064M(misc),32M@1104M(boot),1024M@1144M(system),-@2176M(data)';
 
 function fail(message) { throw new Error(message); }
 function u32(buffer, offset, value) { buffer.writeUInt32LE(value >>> 0, offset); }
@@ -124,6 +125,13 @@ export function selectKernelPath(paths) {
   fail('boot partition lacks Image.gz, zImage, or Image');
 }
 
+export function createBootCommandLine(memoryLimitMiB) {
+  if (!Number.isInteger(memoryLimitMiB) || memoryLimitMiB < 256 || memoryLimitMiB > 4096) {
+    fail('memory limit must be an integer from 256 to 4096 MiB');
+  }
+  return `${BURN_PARTITION_ARGUMENT} root=LABEL=ROOTFS rw rootwait rootfstype=ext4 mem=${memoryLimitMiB}M console=ttyAML0,115200n8 console=tty0 no_console_suspend consoleblank=0 fsck.fix=yes fsck.repair=yes net.ifnames=0 init=/sbin/init`;
+}
+
 export function assertBootPartitionSize(size) {
   if (!Number.isSafeInteger(size) || size <= 0) fail('boot image size is invalid');
   if (size > BOOT_PARTITION_BYTES) {
@@ -195,8 +203,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'sparse' && args.length === 3) console.log(JSON.stringify(makeSparse(args[0], args[1], Number(args[2]))));
   else if (command === 'select-kernel' && args.length > 0) console.log(selectKernelPath(args));
   else if (command === 'prepare-kernel' && args.length === 2) console.log(JSON.stringify(prepareBootKernel(...args)));
+  else if (command === 'command-line' && args.length === 1) console.log(createBootCommandLine(Number(args[0])));
   else if (command === 'multi-dtb' && args.length === 2) console.log(JSON.stringify(writeP212MultiDtb(...args)));
   else if (command === 'check-p212-boot' && args.length === 1) console.log(JSON.stringify(validateP212Boot(...args)));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | multi-dtb input output | check-p212-boot boot | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | command-line memory-limit-mib | multi-dtb input output | check-p212-boot boot | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }
