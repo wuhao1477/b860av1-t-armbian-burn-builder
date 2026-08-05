@@ -111,10 +111,8 @@ function extractBootSecond(image) {
   return image.subarray(offset, offset + size);
 }
 
-export function validateP212DtbPair(bootPath, standalonePath) {
+export function validateP212Boot(bootPath) {
   const second = extractBootSecond(fs.readFileSync(bootPath));
-  const standalone = fs.readFileSync(standalonePath);
-  if (!second.equals(standalone)) fail('boot second and meson1.dtb differ');
   return inspectP212MultiDtb(second);
 }
 
@@ -198,7 +196,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'select-kernel' && args.length > 0) console.log(selectKernelPath(args));
   else if (command === 'prepare-kernel' && args.length === 2) console.log(JSON.stringify(prepareBootKernel(...args)));
   else if (command === 'multi-dtb' && args.length === 2) console.log(JSON.stringify(writeP212MultiDtb(...args)));
-  else if (command === 'check-p212-dtbs' && args.length === 2) console.log(JSON.stringify(validateP212DtbPair(...args)));
+  else if (command === 'check-p212-boot' && args.length === 1) console.log(JSON.stringify(validateP212Boot(...args)));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | multi-dtb input output | check-p212-dtbs boot meson1 | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | multi-dtb input output | check-p212-boot boot | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

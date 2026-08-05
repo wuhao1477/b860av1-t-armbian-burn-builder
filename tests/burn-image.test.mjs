@@ -139,13 +139,12 @@ test('boot image exposes the Linux DTB through both stock P212 selectors', (cont
   assert.deepEqual(second.subarray(4096, 4096 + dtbBytes.length), dtbBytes);
 });
 
-test('burn DTB validation binds boot second to standalone meson1', (context) => {
+test('burn DTB validation checks the Linux multi-DTB in boot second independently', (context) => {
   const directory = fixture(context);
   const kernel = path.join(directory, 'Image.gz');
   const ramdisk = path.join(directory, 'initrd');
   const dtb = path.join(directory, 'board.dtb');
   const boot = path.join(directory, 'boot.PARTITION');
-  const standalone = path.join(directory, 'meson1.dtb');
   const dtbBytes = Buffer.alloc(64, 0x5a);
   dtbBytes.writeUInt32BE(0xd00dfeed, 0);
   dtbBytes.writeUInt32BE(dtbBytes.length, 4);
@@ -153,14 +152,13 @@ test('burn DTB validation binds boot second to standalone meson1', (context) => 
   fs.writeFileSync(ramdisk, Buffer.alloc(1000, 0x22));
   fs.writeFileSync(dtb, dtbBytes);
   burnImage.makeBoot(kernel, ramdisk, dtb, boot, 'root=LABEL=ROOTFS');
-  burnImage.writeP212MultiDtb(dtb, standalone);
 
   assert.equal(
-    typeof burnImage.validateP212DtbPair,
+    typeof burnImage.validateP212Boot,
     'function',
-    'missing burn DTB pair validator',
+    'missing boot second DTB validator',
   );
-  assert.deepEqual(burnImage.validateP212DtbPair(boot, standalone), {
+  assert.deepEqual(burnImage.validateP212Boot(boot), {
     size: 6144,
     targets: ['gxl_p212_1g', 'gxl_p212_2g'],
     fdtSize: 64,

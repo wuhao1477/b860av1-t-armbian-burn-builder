@@ -20,14 +20,13 @@ node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/kernel"; cp "
 sudo sed -i '/^[[:space:]]*LABEL=BOOT[[:space:]]/d' "$root_mount/etc/fstab" 2>/dev/null || true
 sudo umount "$boot_mount" "$root_mount"; root_size=$(sudo blockdev --getsize64 "$root_part"); sudo e2fsck -pf "$root_part" || true
 package="$tmp/package"; mkdir -p "$package"
-for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf bootloader.PARTITION; do
+for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf bootloader.PARTITION meson1.dtb; do
   expected=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$root/config/burn-inputs.json')).files['$name'])")
   printf '%s  %s\n' "$expected" "$root/board-inputs/$name" | sha256sum --check --status
   cp "$root/board-inputs/$name" "$package/$name"
 done
 cmdline='blkdevparts=mmcblk2:4M@0(bootloader),64M@36M(reserved),768M@108M(cache),8M@884M(env),4M@900M(conf),32M@912M(logo),32M@952M(recovery),8M@992M(rsv),8M@1008M(tee),32M@1024M(crypt),32M@1064M(misc),32M@1104M(boot),1024M@1144M(system),-@2176M(data) root=LABEL=ROOTFS rw rootwait rootfstype=ext4 console=ttyAML0,115200n8 console=tty0 no_console_suspend consoleblank=0 fsck.fix=yes fsck.repair=yes net.ifnames=0 init=/sbin/init'
 node "$root/scripts/burn-image.mjs" boot "$tmp/kernel" "$tmp/initrd" "$tmp/dtb" "$package/boot.PARTITION" "$cmdline"
-node "$root/scripts/burn-image.mjs" multi-dtb "$tmp/dtb" "$package/meson1.dtb"
 sudo dd if="$root_part" of="$tmp/rootfs.ext4" bs=4M status=none
 node "$root/scripts/burn-image.mjs" sparse "$tmp/rootfs.ext4" "$package/data.PARTITION" "$root_size"
 tmp_ampack="$tmp/ampack-src"
