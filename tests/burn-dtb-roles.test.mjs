@@ -70,8 +70,17 @@ test('hybrid multi-DTB replaces only the selected P215 slot with the Linux FDT',
   assert.equal(result.linux.fdtSize, fs.statSync(linuxDtb).size);
   assert.equal(result.slotSize, 36864);
   const bytes = fs.readFileSync(output);
+  const vendorBytes = fs.readFileSync(vendorDtb);
   assert.equal(bytes.length, 256000);
-  assert.equal(bytes.subarray(0, 12).toString('ascii'), fs.readFileSync(vendorDtb).subarray(0, 12).toString('ascii'));
+  assert.deepEqual(bytes.subarray(0, result.slotOffset), vendorBytes.subarray(0, result.slotOffset));
+  assert.deepEqual(
+    bytes.subarray(result.slotOffset + result.slotSize),
+    vendorBytes.subarray(result.slotOffset + result.slotSize),
+  );
+  assert.notDeepEqual(
+    bytes.subarray(result.slotOffset, result.slotOffset + result.slotSize),
+    vendorBytes.subarray(result.slotOffset, result.slotOffset + result.slotSize),
+  );
 });
 
 test('burn DTB role validation rejects a vendor multi-DTB as the Linux DTB', (context) => {
