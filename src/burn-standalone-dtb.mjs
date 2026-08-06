@@ -85,8 +85,8 @@ function validateHardware(dtbPath) {
   if (ROOT_COMPATIBLES.some((compatible) => !root.includes(compatible))) {
     fail('standalone DTB root is not mainline P212');
   }
-  if (fdtget(dtbPath, '/', 'amlogic-dt-id') !== 'gxl_p215_1g') {
-    fail('standalone DTB target is not gxl_p215_1g');
+  if (fdtget(dtbPath, '/', 'amlogic-dt-id') !== 'gxl_p211_1g') {
+    fail('standalone DTB target is not gxl_p211_1g');
   }
   for (const [node, expected] of HARDWARE_BINDINGS) {
     if (!fdtget(dtbPath, node, 'compatible').split(/\s+/).includes(expected)) {
@@ -142,7 +142,7 @@ export function validateStandaloneDtb(dtbPath) {
   return {
     size: STANDALONE_DTB_BYTES,
     fdtSize,
-    target: 'gxl_p215_1g',
+    target: 'gxl_p211_1g',
     partitions,
     layoutMiB: stockEmmcLayoutMiB(),
   };

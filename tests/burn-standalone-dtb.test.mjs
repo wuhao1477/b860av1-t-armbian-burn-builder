@@ -48,7 +48,7 @@ function generate(input, output) {
   );
 }
 
-test('standalone DTB CLI preserves mainline bindings and adds the stock P215 partition table', (context) => {
+test('standalone DTB CLI preserves mainline bindings and adds the stock P211 partition table', (context) => {
   const directory = fixture(context);
   const input = path.join(directory, 'board.dtb');
   const output = path.join(directory, 'meson1.dtb');
@@ -66,7 +66,7 @@ test('standalone DTB CLI preserves mainline bindings and adds the stock P215 par
   assert.ok(fdtSize > 8 && fdtSize < image.length);
   assert.ok(image.subarray(fdtSize).every((byte) => byte === 0));
   assert.equal(fdtget(output, '/', 'compatible'), 'amlogic,p212 amlogic,s905x amlogic,meson-gxl');
-  assert.equal(fdtget(output, '/', 'amlogic-dt-id'), 'gxl_p215_1g');
+  assert.equal(fdtget(output, '/', 'amlogic-dt-id'), 'gxl_p211_1g');
   assert.match(fdtget(output, '/soc/ethernet@c9410000', 'compatible'), /meson-gxbb-dwmac/);
   assert.match(fdtget(output, '/soc/apb@d0000000/mmc@74000', 'compatible'), /meson-gx-mmc/);
   assert.match(fdtget(output, '/soc/hdmi-tx@c883a000', 'compatible'), /meson-gxl-dw-hdmi/);
@@ -96,7 +96,7 @@ test('standalone DTB CLI preserves mainline bindings and adds the stock P215 par
   assert.deepEqual(JSON.parse(validation.stdout), {
     size: 256000,
     fdtSize,
-    target: 'gxl_p215_1g',
+    target: 'gxl_p211_1g',
     partitions: partitions.map(([name]) => name),
     layoutMiB: {
       bootloader: 0,
@@ -146,5 +146,5 @@ test('standalone DTB validation rejects the wrong stock target id', (context) =>
   );
 
   assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /gxl_p215_1g/);
+  assert.match(result.stderr, /gxl_p211_1g/);
 });

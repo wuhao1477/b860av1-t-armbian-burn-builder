@@ -6,7 +6,7 @@
 		target-path = "/";
 
 		__overlay__ {
-			amlogic-dt-id = "gxl_p215_1g";
+			amlogic-dt-id = "gxl_p211_1g";
 
 			partitions {
 				parts = <11>;

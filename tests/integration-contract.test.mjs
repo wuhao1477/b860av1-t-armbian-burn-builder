@@ -66,6 +66,9 @@ test('README documents raw-image and operator-attested device validation boundar
   assert.match(readme, /verify-device\.yml/);
   assert.match(readme, /operator-attested \/ one-device/);
   assert.match(readme, /container-valid \/ hardware-unverified/);
+  for (const evidence of [
+    'boot-contract.json', 'dtb-contract.json', 'rootfs-contract.json', 'burn-report.json',
+  ]) assert.match(readme, new RegExp(evidence.replace('.', '\\.')));
 });
 
 test('raw builder writes the identity into rootfs before final sanitization', () => {
@@ -163,13 +166,48 @@ test('validator includes userspace, kernel, DTB, service and media-size checks',
   }
 });
 
-test('burn builder derives the DTB name and UUID from the source partition', () => {
+test('burn builder creates a stock-compatible Android boot v0 package', () => {
   const builder = read('scripts/build-burn-image.sh');
   const validator = read('scripts/validate-burn-image.sh');
   assert.match(builder, /board_dtb=.*config\/board\.json/);
   assert.match(builder, /select-dtb \"\$board_dtb\"/);
   assert.match(builder, /blkid --match-tag UUID --output value \"\$root_part\"/);
-  assert.match(builder, /check-dtb-pair/);
   assert.match(validator, /sparse-ext4-uuid/);
-  assert.match(validator, /check-dtb-pair/);
+  for (const payload of ['boot.PARTITION', 'data.PARTITION', 'meson1.dtb']) {
+    const pattern = new RegExp(payload.replace('.', '\\.'));
+    assert.match(builder, pattern);
+    assert.match(validator, pattern);
+  }
+  assert.doesNotMatch(builder, /1\.PARTITION|env\.PARTITION|system\.PARTITION/);
+  assert.match(builder, /prepare-kernel/);
+  assert.match(builder, /select-initrd/);
+  assert.match(builder, /command-line/);
+  assert.match(builder, /check-stock-boot/);
+  assert.match(validator, /check-stock-boot/);
+  assert.match(builder, /2147483648/);
+  assert.match(builder, /check-burn-dtb-roles/);
+  assert.match(validator, /check-burn-dtb-roles/);
+  assert.match(builder, /standalone-dtb/);
+  assert.match(builder, /board-overlays\/burn-partitions\.dtso/);
+  assert.match(builder, /check-standalone-dtb/);
+  assert.match(validator, /check-standalone-dtb/);
+  assert.ok(builder.indexOf('standalone-dtb') < builder.indexOf('replace-linux-target-dtb'));
+  assert.match(builder, /replace-linux-target-dtb/);
+  assert.match(validator, /replace-linux-target-dtb/);
+  assert.match(builder, /board-inputs\/\$name/);
+  assert.match(validator, /meson1\.dtb/);
+  assert.match(validator, /prohibited Android partition payload/);
+  for (const evidence of ['boot-contract.json', 'dtb-contract.json', 'rootfs-contract.json']) {
+    const pattern = new RegExp(evidence.replace('.', '\\.'));
+    assert.match(builder, pattern);
+    assert.match(validator, pattern);
+  }
+  assert.match(builder, /check-sparse-capacity/);
+  assert.match(builder, /burn-image\.mjs" report/);
+  assert.match(validator, /check-sparse-capacity/);
+  assert.match(validator, /burn-image\.mjs" check-report/);
+  for (const script of [builder, validator]) {
+    assert.match(script, /config\/burn-tooling\.json/);
+    assert.match(script, /checkout --detach/);
+  }
 });

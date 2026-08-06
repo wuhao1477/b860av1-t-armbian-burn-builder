@@ -12,7 +12,10 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  SOURCE_REPOSITORY: wuhao1477/b860av1-t-armbian-builder
 
 concurrency:
   group: b860-burn-weekly
@@ -36,7 +39,7 @@ jobs:
           FORCE: ${{ inputs.force || false }}
         run: |
           set -Eeuo pipefail
-          current=$(gh api repos/wuhao1477/b860av1-t-armbian-builder/releases --paginate --jq '[.[] | select(.draft == false and (.tag_name | startswith("armbian-")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]')
+          current=$(gh api "repos/$SOURCE_REPOSITORY/releases" --paginate --jq '[.[] | select(.draft == false and (.tag_name | startswith("armbian-")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]')
           release_tag=$(jq -r '.tag_name' <<<"$current")
           asset=$(jq -c '[.assets[] | select(.name | test("^Armbian_.*\\.img\\.gz$"))] | .[0]' <<<"$current")
           [[ "$asset" != null ]] || { echo 'latest public B860 release has no raw image' >&2; exit 1; }
@@ -44,10 +47,21 @@ jobs:
           asset_url=$(jq -r '.browser_download_url' <<<"$asset")
           asset_digest=$(jq -r '.digest' <<<"$asset" | sed 's/^sha256://')
           [[ "$asset_digest" =~ ^[0-9a-f]{64}$ ]] || { echo 'public asset has no sha256 digest' >&2; exit 1; }
-          fingerprint=$(printf '%s\n%s\n%s\n' "$release_tag" "$asset_name" "$asset_digest" | sha256sum | awk '{print $1}')
-          previous=$(gh release list --limit 50 --json tagName,isDraft,isPrerelease --jq '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("b860-burn-")))] | first | .tagName // empty')
+          recipe_digest=$(sha256sum \
+            .github/workflows/weekly-burn-build.yml \
+            board-inputs/DDR.USB board-inputs/UBOOT.USB board-inputs/aml_sdc_burn.UBOOT \
+            board-inputs/aml_sdc_burn.ini board-inputs/platform.conf board-inputs/bootloader.PARTITION \
+            board-inputs/meson1.dtb board-overlays/burn-partitions.dtso \
+            config/board.json config/burn-inputs.json config/burn-tooling.json \
+            scripts/build-burn-image.sh scripts/burn-image.mjs \
+            scripts/validate-burn-image.sh src/android-sparse.mjs src/burn-report.mjs \
+            src/burn-dtb-roles.mjs src/burn-standalone-dtb.mjs \
+            src/direct-boot-contract.mjs src/emmc-boot-chain.mjs \
+            | sha256sum | awk '{print $1}')
+          fingerprint=$(printf '%s\n%s\n%s\n%s\n' "$release_tag" "$asset_name" "$asset_digest" "$recipe_digest" | sha256sum | awk '{print $1}')
+          previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft,isPrerelease --jq '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("b860-burn-")))] | first | .tagName // empty')
           old=''
-          if [[ -n "$previous" ]]; then old=$(gh release view "$previous" --json body --jq '.body' | sed -n 's/^Input fingerprint: //p' | head -n1); fi
+          if [[ -n "$previous" ]]; then old=$(gh release view "$previous" --repo "$GITHUB_REPOSITORY" --json body --jq '.body' | sed -n 's/^Input fingerprint: //p' | head -n1); fi
           changed=true
           [[ "$FORCE" == true || "$fingerprint" != "$old" ]] || changed=false
           {
@@ -66,26 +80,33 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 22
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes curl device-tree-compiler e2fsprogs file git gzip kpartx util-linux xz-utils
+          sudo apt-get install --yes curl device-tree-compiler e2fsprogs file git gzip kpartx mtools u-boot-tools util-linux xz-utils
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           toolchain: stable
-      - name: Download public raw image
+      - name: Download and validate public Armbian release
         env:
-          URL: ${{ needs.detect.outputs.asset_url }}
+          GH_TOKEN: ${{ github.token }}
           DIGEST: ${{ needs.detect.outputs.asset_digest }}
           NAME: ${{ needs.detect.outputs.asset_name }}
+          PUBLIC_RELEASE: ${{ needs.detect.outputs.release_tag }}
         run: |
           set -Eeuo pipefail
-          curl --fail --location --retry 5 --output "$NAME" "$URL"
-          printf '%s  %s\n' "$DIGEST" "$NAME" | sha256sum --check --status
+          mkdir source-assets
+          gh release download "$PUBLIC_RELEASE" --repo "$SOURCE_REPOSITORY" --dir source-assets
+          printf '%s  %s\n' "$DIGEST" "source-assets/$NAME" | sha256sum --check --status
+          manifest_fingerprint=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).fingerprint)' source-assets/resolved-sources.json)
+          node scripts/validate-candidate-artifacts.mjs source-assets "$manifest_fingerprint"
       - name: Build Amlogic v2 burn image
-        run: scripts/build-burn-image.sh "${{ needs.detect.outputs.asset_name }}" out
+        run: scripts/build-burn-image.sh "source-assets/${{ needs.detect.outputs.asset_name }}" out
       - name: Independently validate container
-        run: scripts/validate-burn-image.sh out/burn.img
+        run: scripts/validate-burn-image.sh out/burn.img out/burn-report.json "source-assets/${{ needs.detect.outputs.asset_name }}"
       - name: Create and verify xz download asset
         run: |
           set -Eeuo pipefail
@@ -102,7 +123,7 @@ jobs:
           set -Eeuo pipefail
           printf 'Input fingerprint: %s\nPublic release: %s\nStatus: format-valid / hardware-unverified\n' \
             "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" > out/RELEASE.md
-          (cd out && sha256sum burn.img burn.img.xz > SHA256SUMS)
+          (cd out && sha256sum burn.img burn.img.xz boot-contract.json dtb-contract.json rootfs-contract.json burn-report.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: b860-burn-output
@@ -110,6 +131,9 @@ jobs:
             out/burn.img
             out/burn.img.xz
             out/SHA256SUMS
+            out/boot-contract.json
+            out/dtb-contract.json
+            out/rootfs-contract.json
             out/burn-report.json
             out/RELEASE.md
           retention-days: 1
@@ -118,6 +142,8 @@ jobs:
     needs: [detect, build]
     if: ${{ needs.build.result == 'success' }}
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -133,5 +159,68 @@ jobs:
         run: |
           set -Eeuo pipefail
           tag="b860-burn-${PUBLIC_RELEASE#Armbian_}-build-${RUN_NUMBER}.${RUN_ATTEMPT}"
-          gh release create "$tag" out/burn.img out/burn.img.xz out/SHA256SUMS out/burn-report.json out/RELEASE.md \
-            --repo "$GITHUB_REPOSITORY" --prerelease --title "$tag" --notes "Input fingerprint: $FINGERPRINT\nPublic release: $PUBLIC_RELEASE\nStatus: format-valid / hardware-unverified"
+          assets=(
+            out/burn.img
+            out/burn.img.xz
+            out/SHA256SUMS
+            out/boot-contract.json
+            out/dtb-contract.json
+            out/rootfs-contract.json
+            out/burn-report.json
+            out/RELEASE.md
+          )
+          draft_release_ready() {
+            [[ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
+              --jq '[.isDraft,.isPrerelease] | @tsv' 2>/dev/null || true)" == $'true\ttrue' ]]
+          }
+          release_ready=false
+          for attempt in 1 2 3 4 5; do
+            if draft_release_ready; then
+              release_ready=true
+              break
+            fi
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --prerelease --title "$tag" --notes-file out/RELEASE.md || true
+            if draft_release_ready; then
+              release_ready=true
+              break
+            fi
+            sleep $((attempt * 10))
+          done
+          [[ "$release_ready" == true ]] || { echo 'draft release is unavailable' >&2; exit 1; }
+          for asset in "${assets[@]}"; do
+            uploaded=false
+            for attempt in 1 2 3 4 5; do
+              if gh release upload "$tag" "$asset" --repo "$GITHUB_REPOSITORY" --clobber; then
+                uploaded=true
+                break
+              fi
+              sleep $((attempt * 10))
+            done
+            [[ "$uploaded" == true ]] || { echo "failed to upload $asset" >&2; exit 1; }
+          done
+          remote_asset_matches() {
+            local asset=$1 name local_size local_digest matches remote_size remote_digest
+            name=$(basename -- "$asset")
+            local_size=$(stat --format='%s' "$asset")
+            local_digest=$(sha256sum "$asset" | awk '{print $1}')
+            gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json assets,isDraft,isPrerelease \
+              > out/release-assets.json
+            jq -e '.isDraft == true and .isPrerelease == true' out/release-assets.json >/dev/null
+            matches=$(jq -c --arg name "$name" '[.assets[] | select(.name == $name)]' out/release-assets.json)
+            [[ "$(jq 'length' <<<"$matches")" -eq 1 ]] || return 1
+            remote_size=$(jq -r '.[0].size' <<<"$matches")
+            remote_digest=$(jq -r '.[0].digest // ""' <<<"$matches")
+            [[ "$remote_size" == "$local_size" && "$remote_digest" == "sha256:$local_digest" ]]
+          }
+          for asset in "${assets[@]}"; do
+            verified=false
+            for attempt in 1 2 3 4 5; do
+              if remote_asset_matches "$asset"; then
+                verified=true
+                break
+              fi
+              sleep $((attempt * 10))
+            done
+            [[ "$verified" == true ]] || { echo "server asset differs from $asset" >&2; exit 1; }
+          done
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false

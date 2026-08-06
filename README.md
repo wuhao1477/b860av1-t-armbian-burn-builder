@@ -9,7 +9,7 @@
 
 `container-valid / hardware-unverified`
 
-公开资料表明该型号存在硬件批次差异，常见标识包含 S905L/S905MB、1 GB 内存与 `gxl_p215_1g`。当前仓库自有 `b860av1-t` 板型采用 S905L、P212 DTB、1 GB 内存和 `u-boot-s905x-s912`，这是待实机验证的兼容性假设，不是对所有 B860AV1.1-T 批次的硬件确认。
+公开资料表明该型号存在硬件批次差异。当前仓库绑定的原厂 BL33 明确选择 `gxl_p211_1g`，Linux 侧采用 P212 DTB、1 GB 内存和 `u-boot-s905x-s912`；该结论只适用于与仓库原厂输入摘要一致的 B860AV1.1-T 批次。
 
 当前 DTB 是从公开 P212 修复源码构建的候选配置；虽然构建会验证 RTL8189FTV、SDIO 200 MHz、reset GPIO 与 64 MiB CMA 等关键属性，但上游根节点 model 仍是通用 P212，不能据此宣称已完成 B860AV1.1-T 实机适配。
 
@@ -58,15 +58,17 @@ gh workflow run verify-device.yml \
 
 Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必须携带与具体主板 DDR、电源和安全配置匹配的 BL2/BL30/BL301、USB U-Boot 与持久 bootloader。
 
-当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf` 和 `bootloader.PARTITION`。这些文件只作为板级 USB factory-burn 输入，不代表主线 U-Boot 已经替代原厂 DDR/安全初始化，也不扩大到其他 B860 硬件批次。
+当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf`、`bootloader.PARTITION` 和原厂 `meson1.dtb`。这些文件只作为板级 USB factory-burn 输入，不扩大到其他 B860 硬件批次。
 
-`boot.PARTITION` 使用 Android boot v0 容器作为 stock BL33 的装载接口，但 kernel、initrd 和 boot second 都来自 Armbian。boot second 必须是普通 P212 FDT，不能使用 `AML_` multi-DTB；这样独立 `meson1.dtb` 读取失败时，stock BL33 的后备路径仍能直接校验并使用它。独立 `meson1.dtb` 同样以主线 P212 DTB 为基础，应用 `board-overlays/burn-partitions.dtso` 加入 USB 工具要求的 11 项分区节点，并补零到 256000 字节。
+直刷包保留 Android boot v0 的 `boot.PARTITION` 文件格式，但其 kernel、raw initrd 和 boot second 全部来自 Armbian。这个格式只是原厂 BL33 的兼容装载接口，不是 Android 用户空间。构建器先向 Linux DTB 合并原厂 BL33 所需的 `/partitions` 和 `gxl_p211_1g` 标识，再把同一 FDT 写入 boot second 和原厂 Amlogic multi-DTB 的 P211 1 GB 槽。真实 Linux DTB 超过原槽时，构建器会在 256 KiB 上限内扩大该槽并顺移后续条目。
 
-每周直刷工作流只在最新公开 Armbian 输入指纹变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS` 和 `burn-report.json`，然后在独立步骤重新解包并验证 Amlogic v2 容器、boot second plain FDT、独立 plain DTB 和 sparse data 分区。下载时优先使用 `burn.img.xz`，解压后再导入 Amlogic USB Burning Tool。
+`data.PARTITION` 是 Armbian rootfs 的 Android sparse ext4 表示，root UUID 与 `boot.PARTITION` 的 `root=UUID=` 完全一致。包不再生成 `1.PARTITION`、`env.PARTITION` 或 `system.PARTITION`，避免触发目标旧 BL33 不支持的 raw eMMC 入口。启动路径为原厂签名 FIP -> stock BL33 -> Android boot v0 装载接口 -> Armbian kernel/initrd -> Debian rootfs。
+
+每周直刷工作流只在最新公开 Armbian 输入或直刷配方变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS`、`boot-contract.json`、`dtb-contract.json`、`rootfs-contract.json` 和 schema 2 `burn-report.json`。独立步骤会重新解包 Amlogic v2 容器，验证 boot v0、hybrid multi-DTB、root UUID 和 8 GB eMMC 容量，再重算全部契约。下载时优先使用 `burn.img.xz`，解压后导入 Amlogic USB Burning Tool。
 
 raw Armbian 镜像仍主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd` 和 `u-boot.usb`，并验证 MBR 后至 4 MiB 分区起点之间没有启动链。FAT 分区只保留由固定 U-Boot 源码和补丁构建的 `u-boot-s905x-s912.bin`，以及同一字节的 `u-boot.ext`，供外部介质候选使用；它与直刷包是两条不同的启动路径。
 
-仓库会从 `config/aml-autoscript.cmd` 重新生成安装脚本，只把 bootcmd 指向 Armbian 的 `s905_autoscript`，不包含 `storeboot`、`start_emmc_autoscript` 或 `boot_android`。该操作只清除镜像自身的 Android/stock 回退；设备原有 eMMC bootloader 与 logo 仍不属于本仓库控制范围。
+raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。直刷包不改写原厂 bootloader、环境区或 FAT 分区启动脚本，只把 Armbian 的 kernel、initrd、DTB 和 rootfs 放入原厂烧录容器；设备仍保留原厂签名 FIP 负责 DDR 和安全初始化。
 
 ## 静态验证
 
@@ -76,7 +78,7 @@ raw Armbian 镜像仍主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd
 - gzip、已清零的 MBR bootstrap、真实首分区起点、FAT boot 与 ext4 rootfs 结构正确；
 - rootfs 的 Debian major version 和代号与已验签的 stable 元数据一致，同时标识为 Armbian 并存在正常的 `/sbin/init`；
 - boot 分区包含 kernel、initrd、目标 DTB 和 source-built `u-boot-s905x-s912.bin`/`u-boot.ext` overload，活动配置实际引用 kernel、initrd 与 DTB，并在启动参数中固定保守的 `mem=1024M`（对应 `memoryLimitMiB: 1024`）；
-- 使用仓库内 `config/s905-autoscript.cmd` 和 `config/aml-autoscript.cmd` 重新生成两个脚本，解包后拒绝 `android`、`boot_android`、`storeboot` 和 `start_emmc_autoscript` 回退，并检查 `u-boot.ext`、`uEnv.txt`、`booti` 和安装链；这些检查不代表目标盒子的 stock U-Boot 一定成功执行 Armbian；
+- 直刷包验证原厂 USB factory 文件摘要、Android boot v0 头部、kernel/initrd 直接启动配置、boot second 与 Linux P212 DTB、hybrid multi-DTB 槽位、root UUID 和 sparse rootfs 容量，并拒绝旧 raw eMMC 分区载荷；这些检查仍不能替代目标盒子的串口启动证据；
 - boot 分区拒绝旧版 `u-boot.sd`/`u-boot.usb` 以及未列入允许范围的 bootloader 二进制；
 - kernel 是 ARM64，DTB 必须包含精确的 `amlogic,p212` compatible 项；仅有其他 GXL/S905X compatible 的重命名 DTB 不能通过；
 - rootfs 必须包含与目标 `5.10.y-ophub` 内核 vermagic 一致的 ARM64 `8189fs.ko`，模块自身和 `modules.alias` 必须把 RTL8189FTV 的 SDIO ID `024c:F179` 映射到 `8189fs`，`modules.dep` 必须记录 `cfg80211` 与 `rfkill` 依赖；证据写入 `rtl8189fs-driver.json`；
