@@ -51,10 +51,12 @@ jobs:
             .github/workflows/weekly-burn-build.yml \
             board-inputs/DDR.USB board-inputs/UBOOT.USB board-inputs/aml_sdc_burn.UBOOT \
             board-inputs/aml_sdc_burn.ini board-inputs/platform.conf board-inputs/bootloader.PARTITION \
-            board-inputs/meson1.dtb config/board.json config/burn-inputs.json config/burn-tooling.json \
+            board-inputs/meson1.dtb board-overlays/burn-partitions.dtso \
+            config/board.json config/burn-inputs.json config/burn-tooling.json \
             scripts/build-burn-image.sh scripts/burn-image.mjs \
             scripts/validate-burn-image.sh src/android-sparse.mjs src/burn-report.mjs \
-            src/burn-dtb-roles.mjs src/direct-boot-contract.mjs src/emmc-boot-chain.mjs \
+            src/burn-dtb-roles.mjs src/burn-standalone-dtb.mjs \
+            src/direct-boot-contract.mjs src/emmc-boot-chain.mjs \
             | sha256sum | awk '{print $1}')
           fingerprint=$(printf '%s\n%s\n%s\n%s\n' "$release_tag" "$asset_name" "$asset_digest" "$recipe_digest" | sha256sum | awk '{print $1}')
           previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft,isPrerelease --jq '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("b860-burn-")))] | first | .tagName // empty')

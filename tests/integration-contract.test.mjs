@@ -187,6 +187,11 @@ test('burn builder creates a stock-compatible Android boot v0 package', () => {
   assert.match(builder, /2147483648/);
   assert.match(builder, /check-burn-dtb-roles/);
   assert.match(validator, /check-burn-dtb-roles/);
+  assert.match(builder, /standalone-dtb/);
+  assert.match(builder, /board-overlays\/burn-partitions\.dtso/);
+  assert.match(builder, /check-standalone-dtb/);
+  assert.match(validator, /check-standalone-dtb/);
+  assert.ok(builder.indexOf('standalone-dtb') < builder.indexOf('replace-linux-target-dtb'));
   assert.match(builder, /replace-linux-target-dtb/);
   assert.match(validator, /replace-linux-target-dtb/);
   assert.match(builder, /board-inputs\/\$name/);

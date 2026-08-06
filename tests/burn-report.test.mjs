@@ -21,7 +21,7 @@ function fixture(context) {
   fs.writeFileSync(burn, 'burn');
   fs.writeFileSync(source, 'source');
   fs.writeFileSync(boot, JSON.stringify({ initrdCodec: 'gzip', rootUuid: 'root-uuid' }));
-  fs.writeFileSync(dtb, JSON.stringify({ target: 'gxl_p215_1g', layoutMiB: { data: 2176 } }));
+  fs.writeFileSync(dtb, JSON.stringify({ target: 'gxl_p211_1g', layoutMiB: { data: 2176 } }));
   fs.writeFileSync(rootfs, JSON.stringify({ logicalBytes: 3145728000, availableBytes: 5584080896 }));
   return { boot, burn, directory, dtb, rootfs, source };
 }
@@ -42,7 +42,7 @@ test('burn report binds the image to boot, DTB, and rootfs evidence', async (con
   assert.equal(result.status, 'format-valid / hardware-unverified');
   assert.equal(result.board, 'ZXV10 B860AV1.1-T');
   assert.deepEqual(result.boot, { initrdCodec: 'gzip', rootUuid: 'root-uuid' });
-  assert.deepEqual(result.deviceTree, { target: 'gxl_p215_1g', layoutMiB: { data: 2176 } });
+  assert.deepEqual(result.deviceTree, { target: 'gxl_p211_1g', layoutMiB: { data: 2176 } });
   assert.deepEqual(result.rootfs, { logicalBytes: 3145728000, availableBytes: 5584080896 });
   assert.equal(result.burn.size, 4);
   assert.equal(result.source.name, 'Armbian_test.img.gz');
@@ -88,5 +88,5 @@ test('burn report CLI emits machine-readable bound evidence', (context) => {
   const report = JSON.parse(result.stdout);
   assert.equal(report.schemaVersion, 2);
   assert.equal(report.burn.name, 'burn.img');
-  assert.equal(report.deviceTree.target, 'gxl_p215_1g');
+  assert.equal(report.deviceTree.target, 'gxl_p211_1g');
 });

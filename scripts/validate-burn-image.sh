@@ -56,6 +56,7 @@ node "$root/scripts/burn-image.mjs" check-stock-boot \
   "$tmp/unpack/boot.PARTITION" "$root_uuid" > "$tmp/boot-contract.json"
 node "$root/scripts/burn-image.mjs" extract-boot-second \
   "$tmp/unpack/boot.PARTITION" "$tmp/linux.dtb" >/dev/null
+node "$root/scripts/burn-image.mjs" check-standalone-dtb "$tmp/linux.dtb" >/dev/null
 node "$root/scripts/burn-image.mjs" check-dtb-pair \
   "$tmp/unpack/boot.PARTITION" "$tmp/linux.dtb" >/dev/null
 node "$root/scripts/burn-image.mjs" replace-linux-target-dtb \

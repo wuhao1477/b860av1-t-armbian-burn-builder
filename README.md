@@ -9,7 +9,7 @@
 
 `container-valid / hardware-unverified`
 
-公开资料表明该型号存在硬件批次差异，常见标识包含 S905L/S905MB、1 GB 内存与 `gxl_p215_1g`。当前仓库自有 `b860av1-t` 板型采用 S905L、P212 DTB、1 GB 内存和 `u-boot-s905x-s912`，这是待实机验证的兼容性假设，不是对所有 B860AV1.1-T 批次的硬件确认。
+公开资料表明该型号存在硬件批次差异。当前仓库绑定的原厂 BL33 明确选择 `gxl_p211_1g`，Linux 侧采用 P212 DTB、1 GB 内存和 `u-boot-s905x-s912`；该结论只适用于与仓库原厂输入摘要一致的 B860AV1.1-T 批次。
 
 当前 DTB 是从公开 P212 修复源码构建的候选配置；虽然构建会验证 RTL8189FTV、SDIO 200 MHz、reset GPIO 与 64 MiB CMA 等关键属性，但上游根节点 model 仍是通用 P212，不能据此宣称已完成 B860AV1.1-T 实机适配。
 
@@ -60,7 +60,7 @@ Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必
 
 当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf`、`bootloader.PARTITION` 和原厂 `meson1.dtb`。这些文件只作为板级 USB factory-burn 输入，不扩大到其他 B860 硬件批次。
 
-直刷包保留 Android boot v0 的 `boot.PARTITION` 文件格式，但其 kernel、raw initrd 和 boot second 全部来自 Armbian。这个格式只是原厂 BL33 的兼容装载接口，不是 Android 用户空间。USB 烧录阶段使用原厂 256000 字节 Amlogic multi-DTB `meson1.dtb` 完成 `disk_initial` 和 stock BL33 初始化；其中 `gxl_p215_1g` 槽位替换为 Linux `amlogic,p212` DTB。
+直刷包保留 Android boot v0 的 `boot.PARTITION` 文件格式，但其 kernel、raw initrd 和 boot second 全部来自 Armbian。这个格式只是原厂 BL33 的兼容装载接口，不是 Android 用户空间。构建器先向 Linux DTB 合并原厂 BL33 所需的 `/partitions` 和 `gxl_p211_1g` 标识，再把同一 FDT 写入 boot second 和原厂 Amlogic multi-DTB 的 P211 1 GB 槽。真实 Linux DTB 超过原槽时，构建器会在 256 KiB 上限内扩大该槽并顺移后续条目。
 
 `data.PARTITION` 是 Armbian rootfs 的 Android sparse ext4 表示，root UUID 与 `boot.PARTITION` 的 `root=UUID=` 完全一致。包不再生成 `1.PARTITION`、`env.PARTITION` 或 `system.PARTITION`，避免触发目标旧 BL33 不支持的 raw eMMC 入口。启动路径为原厂签名 FIP -> stock BL33 -> Android boot v0 装载接口 -> Armbian kernel/initrd -> Debian rootfs。
 

@@ -345,9 +345,11 @@ test('burn workflow follows the public raw release and publishes direct-boot con
   assert.match(workflow, /validate-candidate-artifacts\.mjs/);
   assert.match(workflow, /recipe_digest/);
   for (const recipeInput of [
+    'board-overlays/burn-partitions.dtso',
     'config/burn-tooling.json',
     'board-inputs/meson1.dtb',
     'src/burn-dtb-roles.mjs',
+    'src/burn-standalone-dtb.mjs',
     'src/direct-boot-contract.mjs',
     'src/emmc-boot-chain.mjs',
   ]) {

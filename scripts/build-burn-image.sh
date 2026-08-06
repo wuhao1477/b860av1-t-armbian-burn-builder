@@ -46,7 +46,11 @@ dtb=$(node "$root/scripts/burn-image.mjs" select-dtb "$board_dtb" "${dtb_candida
 }
 node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/kernel" >/dev/null
 cp -- "$initrd" "$tmp/initrd"
-cp -- "$dtb" "$tmp/linux.dtb"
+cp -- "$dtb" "$tmp/linux.source.dtb"
+node "$root/scripts/burn-image.mjs" standalone-dtb \
+  "$tmp/linux.source.dtb" "$root/board-overlays/burn-partitions.dtso" \
+  "$tmp/linux.dtb" >/dev/null
+node "$root/scripts/burn-image.mjs" check-standalone-dtb "$tmp/linux.dtb" >/dev/null
 
 root_uuid=$(sudo blkid --match-tag UUID --output value "$root_part")
 sudo sed -i '/^[[:space:]]*LABEL=BOOT[[:space:]]/d' "$root_mount/etc/fstab" 2>/dev/null || true
