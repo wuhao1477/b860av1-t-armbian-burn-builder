@@ -32,7 +32,7 @@ gh workflow run verify-device.yml \
 
 通过后只为该 Release 增加 `operator-attested / one-device` 资产；原始 `validation-report.json` 继续保持 `container-valid / hardware-unverified`。这是单台设备的操作者证据，不是远程密码学硬件证明，也不代表所有硬件批次已经适配。
 
-公开构建仍只发布 Armbian raw `.img.gz`，不是 `burn.img`。证据流程不加入 Android boot、厂商 BL2/BL30/BL301 或 USB factory-burn 组件。
+公开构建同时发布 Armbian raw `.img.gz` 和 USB Burning Tool 候选 `burn.img.xz`。直刷包状态固定为 `format-valid / hardware-unverified`：容器结构和 Linux 设备树通过自动校验，但尚无该设备的串口启动证据。设备证据流程仍只针对 raw 镜像，不会把实机证明写成构建成功。
 
 ## 自动构建
 
@@ -54,15 +54,17 @@ gh workflow run verify-device.yml \
 
 手动启动：打开 [Weekly build](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/weekly-build.yml)，选择 **Run workflow**，把 `force` 设为 `true`。
 
-## 为什么公开 Release 暂时没有 burn.img
+## burn.img 直刷候选
 
 Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必须携带与具体主板 DDR、电源和安全配置匹配的 BL2/BL30/BL301、USB U-Boot 与持久 bootloader。
 
-主线 U-Boot v2026.07 的 GXL SPL 仍是实验功能，USB 路径尚不能替代 Optimus factory-burn；TF-A 的 GXL BL31 仍会等待 BL30/BL301 SCP 固件。当前找到的厂商二进制没有足够的公开再分发许可，因此本仓库不能把这些文件或包含它们的派生 `burn.img` 放进公开 Release。
+当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf` 和 `bootloader.PARTITION`。这些文件只作为板级 USB factory-burn 输入，不代表主线 U-Boot 已经替代原厂 DDR/安全初始化，也不扩大到其他 B860 硬件批次。
 
-本仓库不提供兼容打包工作流，也不生成 Android boot v0 文件头。公开 Release 只包含 Armbian raw 磁盘镜像候选；构建会移除 ophub 平台目录中的旧版 `u-boot.sd`/`u-boot.usb`，不能直接导入 Amlogic USB Burning Tool。
+`boot.PARTITION` 使用 Android boot v0 容器作为 stock BL33 的装载接口，但 kernel、initrd 和 boot second 都来自 Armbian。boot second 必须是普通 P212 FDT，不能使用 `AML_` multi-DTB；这样独立 `meson1.dtb` 读取失败时，stock BL33 的后备路径仍能直接校验并使用它。独立 `meson1.dtb` 同样以主线 P212 DTB 为基础，应用 `board-overlays/burn-partitions.dtso` 加入 USB 工具要求的 11 项分区节点，并补零到 256000 字节。
 
-公开镜像会主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd` 和 `u-boot.usb`，并验证 MBR 后至 4 MiB 分区起点之间没有启动链。FAT 分区只保留由固定 U-Boot 源码和补丁构建的 `u-boot-s905x-s912.bin`，以及同一字节的 `u-boot.ext`，供现有兼容 stock boot chain 加载；它是外部介质候选，不要把整张镜像直接覆盖到 eMMC。
+每周直刷工作流只在最新公开 Armbian 输入指纹变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS` 和 `burn-report.json`，然后在独立步骤重新解包并验证 Amlogic v2 容器、boot second plain FDT、独立 plain DTB 和 sparse data 分区。下载时优先使用 `burn.img.xz`，解压后再导入 Amlogic USB Burning Tool。
+
+raw Armbian 镜像仍主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd` 和 `u-boot.usb`，并验证 MBR 后至 4 MiB 分区起点之间没有启动链。FAT 分区只保留由固定 U-Boot 源码和补丁构建的 `u-boot-s905x-s912.bin`，以及同一字节的 `u-boot.ext`，供外部介质候选使用；它与直刷包是两条不同的启动路径。
 
 仓库会从 `config/aml-autoscript.cmd` 重新生成安装脚本，只把 bootcmd 指向 Armbian 的 `s905_autoscript`，不包含 `storeboot`、`start_emmc_autoscript` 或 `boot_android`。该操作只清除镜像自身的 Android/stock 回退；设备原有 eMMC bootloader 与 logo 仍不属于本仓库控制范围。
 

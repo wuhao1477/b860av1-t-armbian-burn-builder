@@ -1,8 +1,9 @@
 # B860AV1.1-T device evidence
 
-The published image remains a raw `.img.gz` Armbian image. It is not an
-Amlogic USB Burning Tool `burn.img`, and the evidence process does not add a
-vendor Android boot chain.
+This evidence workflow targets the raw `.img.gz` Armbian image. The separate
+USB Burning Tool `burn.img` candidate is format-validated but remains
+hardware-unverified; this process does not add a vendor Android boot chain or
+turn a raw-image test into a burn-image hardware claim.
 
 The collector is read-only. It checks the running image identity, kernel
 release, eMMC, Ethernet, HDMI, infrared, USB, and RTL8189FTV Wi-Fi. It writes
