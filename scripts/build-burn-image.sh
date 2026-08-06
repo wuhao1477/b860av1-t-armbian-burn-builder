@@ -35,17 +35,15 @@ sudo mount -o rw "$root_part" "$root_mount"
 
 board_dtb=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$root/config/board.json')).dtb)")
 mapfile -t kernel_candidates < <(find "$boot_mount" -type f \( -name Image.gz -o -name Image -o -name zImage \) | sort)
-mapfile -t initrd_candidates < <(find "$boot_mount" -type f -name 'initrd.img-*' | sort)
 mapfile -t dtb_candidates < <(find "$boot_mount" -type f -name "$board_dtb" | sort)
 kernel=$(node "$root/scripts/burn-image.mjs" select-kernel "${kernel_candidates[@]}")
-initrd=$(node "$root/scripts/burn-image.mjs" select-initrd "${initrd_candidates[@]}")
 dtb=$(node "$root/scripts/burn-image.mjs" select-dtb "$board_dtb" "${dtb_candidates[@]}")
-[[ -n "$kernel" && -n "$initrd" && -n "$dtb" ]] || {
-  echo 'boot partition lacks the active B860 kernel, raw initrd, or P212 DTB' >&2
+[[ -n "$kernel" && -n "$dtb" ]] || {
+  echo 'boot partition lacks the active B860 kernel or P212 DTB' >&2
   exit 1
 }
 node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/kernel" >/dev/null
-cp -- "$initrd" "$tmp/initrd"
+truncate --size=0 "$tmp/initrd"
 cp -- "$dtb" "$tmp/linux.source.dtb"
 node "$root/scripts/burn-image.mjs" standalone-dtb \
   "$tmp/linux.source.dtb" "$root/board-overlays/burn-partitions.dtso" \

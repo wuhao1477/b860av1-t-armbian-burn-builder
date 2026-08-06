@@ -95,7 +95,7 @@
 		target-path = "/soc/apb@d0000000/mmc@74000";
 
 		__overlay__ {
-			max-frequency = <100000000>;
+			max-frequency = <50000000>;
 		};
 	};
 };

@@ -20,6 +20,8 @@ function arm64Image() {
     'CONFIG_BLK_CMDLINE_PARSER=y',
     'CONFIG_BLK_DEV_INITRD=y',
     'CONFIG_CMDLINE_PARTITION=y',
+    'CONFIG_DEVTMPFS=y',
+    'CONFIG_DEVTMPFS_MOUNT=y',
     'CONFIG_DRM_DW_HDMI=y',
     'CONFIG_DRM_MESON=y',
     'CONFIG_DRM_MESON_DW_HDMI=y',
@@ -58,7 +60,7 @@ function createBoot(directory, cmdline, dtbBytes = plainFdt()) {
   const dtb = path.join(directory, 'meson1.dtb');
   const boot = path.join(directory, 'boot.PARTITION');
   fs.writeFileSync(kernel, gzipSync(arm64Image()));
-  fs.writeFileSync(initrd, gzipSync(Buffer.from('070701fixture-initramfs')));
+  fs.writeFileSync(initrd, Buffer.alloc(0));
   fs.writeFileSync(dtb, dtbBytes);
   burnImage.makeBoot(kernel, initrd, dtb, boot, cmdline);
   return { boot, dtb };

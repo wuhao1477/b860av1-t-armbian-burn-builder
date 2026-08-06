@@ -37,7 +37,7 @@ export {
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
 const STOCK_BOOTM_BYTES = 64 * 1024 * 1024;
-const STANDALONE_DTB_BYTES = 256000;
+const P211_DTB_SLOT_BYTES = 36 * 1024;
 const ANDROID_BOOT_PAGE_BYTES = 2048;
 const BURN_PARTITION_ARGUMENT = 'blkdevparts=mmcblk2:4M@0(bootloader),64M@36M(reserved),768M@108M(cache),8M@884M(env),4M@900M(conf),32M@912M(logo),32M@952M(recovery),8M@992M(rsv),8M@1008M(tee),32M@1024M(crypt),32M@1064M(misc),32M@1104M(boot),1024M@1144M(system),-@2176M(data)';
 
@@ -70,7 +70,8 @@ function inspectBootCommandLine(image) {
 export function writeStandaloneDtb(inputPath, overlayPath, outputPath) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-standalone-dtb-'));
   const compiledOverlay = path.join(directory, 'burn-partitions.dtbo');
-  const mergedDtb = path.join(directory, 'meson1.unpadded.dtb');
+  const mergedDtb = path.join(directory, 'meson1.merged.dtb');
+  const compactDtb = path.join(directory, 'meson1.compact.dtb');
   try {
     childProcess.execFileSync(
       'dtc',
@@ -80,18 +81,26 @@ export function writeStandaloneDtb(inputPath, overlayPath, outputPath) {
       'fdtoverlay',
       ['-i', inputPath, '-o', mergedDtb, compiledOverlay],
     );
-    const merged = fs.readFileSync(mergedDtb);
-    if (merged.length < 8 || merged.readUInt32BE(0) !== 0xd00dfeed) {
+    const rootNodes = childProcess.execFileSync('fdtget', ['-l', mergedDtb, '/'], {
+      encoding: 'utf8',
+    }).trim().split(/\r?\n/u);
+    if (rootNodes.includes('__symbols__')) {
+      childProcess.execFileSync('fdtput', ['-r', mergedDtb, '/__symbols__']);
+    }
+    childProcess.execFileSync(
+      'dtc',
+      ['-q', '-I', 'dtb', '-O', 'dtb', '-o', compactDtb, mergedDtb],
+    );
+    const compact = fs.readFileSync(compactDtb);
+    if (compact.length < 8 || compact.readUInt32BE(0) !== 0xd00dfeed) {
       fail('standalone DTB overlay output is not an FDT');
     }
-    const fdtSize = merged.readUInt32BE(4);
-    if (fdtSize < 8 || fdtSize > merged.length || fdtSize > STANDALONE_DTB_BYTES) {
+    const fdtSize = compact.readUInt32BE(4);
+    if (fdtSize !== compact.length || fdtSize > P211_DTB_SLOT_BYTES) {
       fail('standalone DTB overlay output size is invalid');
     }
-    const output = Buffer.alloc(STANDALONE_DTB_BYTES);
-    merged.copy(output, 0, 0, fdtSize);
-    fs.writeFileSync(outputPath, output);
-    return { size: output.length, fdtSize };
+    fs.writeFileSync(outputPath, compact);
+    return { size: compact.length, fdtSize };
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -116,8 +125,9 @@ export function extractBootSecondDtb(bootPath, outputPath) {
   return inspected;
 }
 
-function bootPayload(image, sizeOffset, start) {
+function bootPayload(image, sizeOffset, start, allowEmpty = false) {
   const size = image.readUInt32LE(sizeOffset);
+  if (size === 0 && allowEmpty) return { payload: Buffer.alloc(0), next: start };
   if (size === 0 || start + size > image.length) fail('Android boot payload is invalid');
   return { payload: image.subarray(start, start + size), next: start + align(size, ANDROID_BOOT_PAGE_BYTES) };
 }
@@ -150,8 +160,11 @@ export function validateStockBoot(bootPath, expectedRootUuid) {
   const kernelLoadAddress = image.readUInt32LE(12);
   if (kernelLoadAddress !== 0x01080000) fail('stock boot kernel load address is invalid');
   const kernelPart = bootPayload(image, 8, pageSize);
-  const ramdiskPart = bootPayload(image, 16, kernelPart.next);
+  const ramdiskPart = bootPayload(image, 16, kernelPart.next, true);
   const secondPart = bootPayload(image, 24, ramdiskPart.next);
+  if (ramdiskPart.payload.length !== 0) {
+    fail('stock direct-root boot must not contain an initramfs');
+  }
   if (ramdiskPart.payload.length >= 4 && ramdiskPart.payload.readUInt32BE(0) === 0x27051956) {
     fail('Android boot ramdisk contains a legacy uInitrd header');
   }

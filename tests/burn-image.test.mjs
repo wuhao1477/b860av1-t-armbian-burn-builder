@@ -12,6 +12,7 @@ import * as burnImage from '../scripts/burn-image.mjs';
 const cli = fileURLToPath(new URL('../scripts/burn-image.mjs', import.meta.url));
 const TEST_KERNEL_CONFIG = [
   'CONFIG_BLK_CMDLINE_PARSER=y', 'CONFIG_BLK_DEV_INITRD=y', 'CONFIG_CMDLINE_PARTITION=y',
+  'CONFIG_DEVTMPFS=y', 'CONFIG_DEVTMPFS_MOUNT=y',
   'CONFIG_DRM_DW_HDMI=y', 'CONFIG_DRM_MESON=y', 'CONFIG_DRM_MESON_DW_HDMI=y',
   'CONFIG_DWMAC_MESON=y', 'CONFIG_EXT4_FS=y', 'CONFIG_IKCONFIG=y',
   'CONFIG_MESON_GXL_PHY=y', 'CONFIG_MMC_BLOCK=y', 'CONFIG_MMC_MESON_GX=y',
@@ -235,7 +236,7 @@ test('stock boot validation proves the complete Linux boot payload contract', (c
   const dtb = path.join(directory, 'board.dtb');
   const boot = path.join(directory, 'boot.PARTITION');
   const rawKernel = arm64Image();
-  const rawRamdisk = gzipSync(Buffer.from('070701fixture-initramfs'));
+  const rawRamdisk = Buffer.alloc(0);
   const dtbBytes = Buffer.alloc(64, 0x5a);
   dtbBytes.writeUInt32BE(0xd00dfeed, 0);
   dtbBytes.writeUInt32BE(dtbBytes.length, 4);
@@ -269,20 +270,21 @@ test('stock boot validation proves the complete Linux boot payload contract', (c
     secondSize: dtbBytes.length,
     secondFdtSize: dtbBytes.length,
     rootUuid: '50031852-ee90-4285-ada7-ab9dc14670c9',
-    initrdCodec: 'gzip',
-    initrdKernelConfig: 'CONFIG_RD_GZIP',
+    initrdCodec: 'none',
+    initrdKernelConfig: null,
     requiredKernelConfig: {
       CONFIG_BLK_CMDLINE_PARSER: 'y', CONFIG_BLK_DEV_INITRD: 'y',
-      CONFIG_CMDLINE_PARTITION: 'y', CONFIG_DRM_DW_HDMI: 'y', CONFIG_DRM_MESON: 'y',
+      CONFIG_CMDLINE_PARTITION: 'y', CONFIG_DEVTMPFS: 'y', CONFIG_DEVTMPFS_MOUNT: 'y',
+      CONFIG_DRM_DW_HDMI: 'y', CONFIG_DRM_MESON: 'y',
       CONFIG_DRM_MESON_DW_HDMI: 'y', CONFIG_DWMAC_MESON: 'y', CONFIG_EXT4_FS: 'y',
       CONFIG_IKCONFIG: 'y', CONFIG_MESON_GXL_PHY: 'y', CONFIG_MMC_BLOCK: 'y',
       CONFIG_MMC_MESON_GX: 'y', CONFIG_PHY_MESON_GXL_USB2: 'y',
-      CONFIG_RD_GZIP: 'y', CONFIG_STMMAC_ETH: 'y',
+      CONFIG_STMMAC_ETH: 'y',
     },
   });
 });
 
-test('stock boot validation rejects a legacy uInitrd inside Android boot', (context) => {
+test('stock boot validation rejects a ramdisk inside Android boot', (context) => {
   const directory = fixture(context);
   const kernel = path.join(directory, 'Image.gz');
   const ramdisk = path.join(directory, 'uInitrd');
@@ -300,7 +302,7 @@ test('stock boot validation rejects a legacy uInitrd inside Android boot', (cont
 
   assert.throws(
     () => burnImage.validateStockBoot(boot),
-    /legacy uInitrd/,
+    /must not contain an initramfs/,
   );
 });
 

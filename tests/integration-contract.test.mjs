@@ -180,7 +180,8 @@ test('burn builder creates a stock-compatible Android boot v0 package', () => {
   }
   assert.doesNotMatch(builder, /1\.PARTITION|env\.PARTITION|system\.PARTITION/);
   assert.match(builder, /prepare-kernel/);
-  assert.match(builder, /select-initrd/);
+  assert.doesNotMatch(builder, /select-initrd/);
+  assert.match(builder, /truncate --size=0 "\$tmp\/initrd"/);
   assert.match(builder, /command-line/);
   assert.match(builder, /check-stock-boot/);
   assert.match(validator, /check-stock-boot/);
