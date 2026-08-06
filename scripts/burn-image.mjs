@@ -1,12 +1,21 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import crypto from 'node:crypto';
+import childProcess from 'node:child_process';
+import os from 'node:os';
 import { basename } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import path from 'node:path';
+import { gunzipSync, gzipSync } from 'node:zlib';
+
+import { readSparseExt4Uuid } from '../src/android-sparse.mjs';
+import { validateStandaloneDtb } from '../src/burn-standalone-dtb.mjs';
+
+export { readSparseExt4Uuid } from '../src/android-sparse.mjs';
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
-const AML_DTB_PAGE_BYTES = 2048;
-const P212_DTB_TARGETS = ['gxl_p212_1g', 'gxl_p212_2g'];
+const STOCK_BOOTM_BYTES = 64 * 1024 * 1024;
+const STANDALONE_DTB_BYTES = 256000;
+const ANDROID_BOOT_PAGE_BYTES = 2048;
 const BURN_PARTITION_ARGUMENT = 'blkdevparts=mmcblk2:4M@0(bootloader),64M@36M(reserved),768M@108M(cache),8M@884M(env),4M@900M(conf),32M@912M(logo),32M@952M(recovery),8M@992M(rsv),8M@1008M(tee),32M@1024M(crypt),32M@1064M(misc),32M@1104M(boot),1024M@1144M(system),-@2176M(data)';
 
 function fail(message) { throw new Error(message); }
@@ -16,105 +25,141 @@ function align(value, boundary) {
   return Math.ceil(value / boundary) * boundary;
 }
 
-function encodeAmlogicDtbProperty(value) {
-  if (!/^[a-z0-9]+$/.test(value) || value.length > 16) fail(`invalid Amlogic DTB property: ${value}`);
-  const plain = Buffer.alloc(16, 0x20);
-  plain.write(value, 0, 'ascii');
-  const encoded = Buffer.alloc(16);
-  for (let offset = 0; offset < plain.length; offset += 4) {
-    for (let index = 0; index < 4; index += 1) encoded[offset + index] = plain[offset + 3 - index];
+function normalizeUuid(value) {
+  if (typeof value !== 'string'
+      || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value)) {
+    fail('root filesystem UUID is invalid');
   }
-  return encoded;
+  return value.toLowerCase();
 }
 
-export function createP212MultiDtb(dtb) {
-  if (!Buffer.isBuffer(dtb) || dtb.length < 8 || dtb.readUInt32BE(0) !== 0xd00dfeed) {
-    fail('input is not a flattened device tree');
+function inspectBootCommandLine(image) {
+  const field = image.subarray(64, 576);
+  const nul = field.indexOf(0);
+  const commandLine = field.subarray(0, nul < 0 ? field.length : nul).toString('ascii');
+  const roots = commandLine.split(/\s+/u).filter((token) => token.startsWith('root='));
+  if (roots.length !== 1 || !roots[0].startsWith('root=UUID=')) {
+    fail('stock boot command line must contain one root=UUID');
   }
-  const fdtSize = dtb.readUInt32BE(4);
-  if (fdtSize < 8 || fdtSize > dtb.length) fail('flattened device tree size is invalid');
-  const entryBytes = 56;
-  const headerBytes = align(12 + (entryBytes * P212_DTB_TARGETS.length), AML_DTB_PAGE_BYTES);
-  const payloadBytes = align(dtb.length, AML_DTB_PAGE_BYTES);
-  const output = Buffer.alloc(headerBytes + (payloadBytes * P212_DTB_TARGETS.length));
-  output.write('AML_', 0, 'ascii');
-  u32(output, 4, 2);
-  u32(output, 8, P212_DTB_TARGETS.length);
-  P212_DTB_TARGETS.forEach((target, index) => {
-    const entryOffset = 12 + (index * entryBytes);
-    target.split('_').forEach((property, propertyIndex) => {
-      encodeAmlogicDtbProperty(property).copy(output, entryOffset + (propertyIndex * 16));
-    });
-    u32(output, entryOffset + 48, headerBytes + (index * payloadBytes));
-    u32(output, entryOffset + 52, payloadBytes);
-    dtb.copy(output, headerBytes + (index * payloadBytes));
-  });
-  return output;
+  return { commandLine, rootUuid: normalizeUuid(roots[0].slice('root=UUID='.length)) };
 }
 
-export function writeP212MultiDtb(inputPath, outputPath) {
-  const output = createP212MultiDtb(fs.readFileSync(inputPath));
-  fs.writeFileSync(outputPath, output);
-  return { size: output.length, targets: P212_DTB_TARGETS };
-}
-
-function decodeAmlogicDtbProperty(image, offset) {
-  const decoded = Buffer.alloc(16);
-  for (let group = 0; group < decoded.length; group += 4) {
-    for (let index = 0; index < 4; index += 1) decoded[group + index] = image[offset + group + 3 - index];
-  }
-  return decoded.toString('ascii').replace(/ +$/u, '');
-}
-
-export function inspectP212MultiDtb(image) {
-  if (!Buffer.isBuffer(image) || image.length < AML_DTB_PAGE_BYTES
-      || image.toString('ascii', 0, 4) !== 'AML_'
-      || image.readUInt32LE(4) !== 2 || image.readUInt32LE(8) !== 2) {
-    fail('P212 multi-DTB header is invalid');
-  }
-  const targets = [];
-  const entries = [];
-  const payloads = [];
-  for (let index = 0; index < P212_DTB_TARGETS.length; index += 1) {
-    const entry = 12 + (index * 56);
-    const target = [0, 16, 32].map((delta) => decodeAmlogicDtbProperty(image, entry + delta)).join('_');
-    const offset = image.readUInt32LE(entry + 48);
-    const size = image.readUInt32LE(entry + 52);
-    const expectedOffset = index === 0
-      ? AML_DTB_PAGE_BYTES
-      : entries[index - 1].offset + entries[index - 1].size;
-    if (target !== P212_DTB_TARGETS[index] || offset !== expectedOffset
-        || size === 0 || size % AML_DTB_PAGE_BYTES !== 0 || offset + size > image.length) {
-      fail('P212 multi-DTB entry is invalid');
+export function writeStandaloneDtb(inputPath, overlayPath, outputPath) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-standalone-dtb-'));
+  const compiledOverlay = path.join(directory, 'burn-partitions.dtbo');
+  const mergedDtb = path.join(directory, 'meson1.unpadded.dtb');
+  try {
+    childProcess.execFileSync(
+      'dtc',
+      ['-q', '-@', '-I', 'dts', '-O', 'dtb', '-o', compiledOverlay, overlayPath],
+    );
+    childProcess.execFileSync(
+      'fdtoverlay',
+      ['-i', inputPath, '-o', mergedDtb, compiledOverlay],
+    );
+    const merged = fs.readFileSync(mergedDtb);
+    if (merged.length < 8 || merged.readUInt32BE(0) !== 0xd00dfeed) {
+      fail('standalone DTB overlay output is not an FDT');
     }
-    if (image.readUInt32BE(offset) !== 0xd00dfeed) fail('P212 multi-DTB payload is not an FDT');
-    const fdtSize = image.readUInt32BE(offset + 4);
-    if (fdtSize < 8 || fdtSize > size) fail('P212 multi-DTB FDT size is invalid');
-    targets.push(target);
-    entries.push({ offset, size });
-    payloads.push(image.subarray(offset, offset + fdtSize));
+    const fdtSize = merged.readUInt32BE(4);
+    if (fdtSize < 8 || fdtSize > merged.length || fdtSize > STANDALONE_DTB_BYTES) {
+      fail('standalone DTB overlay output size is invalid');
+    }
+    const output = Buffer.alloc(STANDALONE_DTB_BYTES);
+    merged.copy(output, 0, 0, fdtSize);
+    fs.writeFileSync(outputPath, output);
+    return { size: output.length, fdtSize };
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
   }
-  if (entries[0].size !== entries[1].size
-      || image.length !== entries[1].offset + entries[1].size
-      || !payloads[0].equals(payloads[1])) fail('P212 multi-DTB payload copies differ');
-  return { size: image.length, targets, fdtSize: payloads[0].length };
 }
 
 function extractBootSecond(image) {
-  if (image.length < AML_DTB_PAGE_BYTES || image.toString('ascii', 0, 8) !== 'ANDROID!') {
+  if (image.length < ANDROID_BOOT_PAGE_BYTES || image.toString('ascii', 0, 8) !== 'ANDROID!') {
     fail('boot partition is not Android boot v0');
   }
   const page = image.readUInt32LE(36);
-  if (page !== AML_DTB_PAGE_BYTES) fail('boot partition page size is not 2048');
+  if (page !== ANDROID_BOOT_PAGE_BYTES) fail('boot partition page size is not 2048');
   const offset = page + align(image.readUInt32LE(8), page) + align(image.readUInt32LE(16), page);
   const size = image.readUInt32LE(24);
   if (size === 0 || offset + size > image.length) fail('boot partition second payload is invalid');
   return image.subarray(offset, offset + size);
 }
 
-export function validateP212Boot(bootPath) {
+function bootPayload(image, sizeOffset, start) {
+  const size = image.readUInt32LE(sizeOffset);
+  if (size === 0 || start + size > image.length) fail('Android boot payload is invalid');
+  return { payload: image.subarray(start, start + size), next: start + align(size, ANDROID_BOOT_PAGE_BYTES) };
+}
+
+function inspectArm64Kernel(compressed, loadAddress) {
+  if (compressed.length < 2 || compressed[0] !== 0x1f || compressed[1] !== 0x8b) {
+    fail('stock boot kernel is not gzip-compressed');
+  }
+  let kernel;
+  try { kernel = gunzipSync(compressed); } catch { fail('stock boot kernel gzip stream is invalid'); }
+  if (kernel.length < 64 || kernel.length > STOCK_BOOTM_BYTES
+      || kernel.toString('ascii', 56, 60) !== 'ARMd') {
+    fail('stock boot kernel is not a supported ARM64 Image');
+  }
+  const textOffset = Number(kernel.readBigUInt64LE(8));
+  if (!Number.isSafeInteger(textOffset) || textOffset !== loadAddress) {
+    fail('stock boot kernel text offset does not match its load address');
+  }
+  return { size: kernel.length, textOffset };
+}
+
+export function validateStockBoot(bootPath, expectedRootUuid) {
+  const image = fs.readFileSync(bootPath);
+  assertBootPartitionSize(image.length);
+  if (image.length < ANDROID_BOOT_PAGE_BYTES || image.toString('ascii', 0, 8) !== 'ANDROID!') {
+    fail('boot partition is not Android boot v0');
+  }
+  const pageSize = image.readUInt32LE(36);
+  if (pageSize !== ANDROID_BOOT_PAGE_BYTES) fail('boot partition page size is not 2048');
+  const kernelLoadAddress = image.readUInt32LE(12);
+  if (kernelLoadAddress !== 0x01080000) fail('stock boot kernel load address is invalid');
+  const kernelPart = bootPayload(image, 8, pageSize);
+  const ramdiskPart = bootPayload(image, 16, kernelPart.next);
+  const secondPart = bootPayload(image, 24, ramdiskPart.next);
+  if (ramdiskPart.payload.length >= 4 && ramdiskPart.payload.readUInt32BE(0) === 0x27051956) {
+    fail('Android boot ramdisk contains a legacy uInitrd header');
+  }
+  const kernel = inspectArm64Kernel(kernelPart.payload, kernelLoadAddress);
+  const second = inspectPlainFdt(secondPart.payload, 'boot second');
+  const command = inspectBootCommandLine(image);
+  if (expectedRootUuid !== undefined && command.rootUuid !== normalizeUuid(expectedRootUuid)) {
+    fail('stock boot root filesystem UUID differs from data.PARTITION');
+  }
+  return {
+    size: image.length, pageSize, kernelCompressedSize: kernelPart.payload.length,
+    kernelUncompressedSize: kernel.size, kernelLoadAddress, kernelTextOffset: kernel.textOffset,
+    ramdiskSize: ramdiskPart.payload.length, secondSize: secondPart.payload.length,
+    secondFdtSize: second.fdtSize, rootUuid: command.rootUuid,
+  };
+}
+
+function inspectPlainFdt(image, label) {
+  if (!Buffer.isBuffer(image) || image.length < 8 || image.readUInt32BE(0) !== 0xd00dfeed) {
+    fail(`${label} is not a plain FDT`);
+  }
+  const fdtSize = image.readUInt32BE(4);
+  if (fdtSize < 8 || fdtSize > image.length) fail(`${label} FDT size is invalid`);
+  return { size: image.length, fdtSize };
+}
+
+export function validateBootSecondDtb(bootPath) {
   const second = extractBootSecond(fs.readFileSync(bootPath));
-  return inspectP212MultiDtb(second);
+  return inspectPlainFdt(second, 'boot second');
+}
+
+export function validateDtbPair(bootPath, standalonePath) {
+  const second = extractBootSecond(fs.readFileSync(bootPath));
+  const standalone = fs.readFileSync(standalonePath);
+  const inspected = inspectPlainFdt(second, 'boot second');
+  inspectPlainFdt(standalone, 'meson1.dtb');
+  if (!second.equals(standalone)) fail('boot second and meson1.dtb differ');
+  return inspected;
 }
 
 export function selectKernelPath(paths) {
@@ -125,11 +170,28 @@ export function selectKernelPath(paths) {
   fail('boot partition lacks Image.gz, zImage, or Image');
 }
 
-export function createBootCommandLine(memoryLimitMiB) {
+export function selectDeviceTreePath(paths, expectedName = 'meson-gxl-s905x-p212-b860av11t.dtb') {
+  const matches = paths
+    .filter((candidate) => basename(candidate) === expectedName)
+    .sort();
+  if (matches.length > 0) return matches[0];
+  fail(`boot partition lacks the expected DTB: ${expectedName}`);
+}
+
+export function selectInitrdPath(paths) {
+  const matches = paths
+    .filter((candidate) => /^initrd\.img-.+/.test(basename(candidate)))
+    .sort();
+  if (matches.length === 1) return matches[0];
+  if (matches.length === 0) fail('boot partition lacks a raw versioned initrd');
+  fail('boot partition contains multiple raw versioned initrds');
+}
+
+export function createBootCommandLine(memoryLimitMiB, rootUuid) {
   if (!Number.isInteger(memoryLimitMiB) || memoryLimitMiB < 256 || memoryLimitMiB > 4096) {
     fail('memory limit must be an integer from 256 to 4096 MiB');
   }
-  return `${BURN_PARTITION_ARGUMENT} root=LABEL=ROOTFS rw rootwait rootfstype=ext4 mem=${memoryLimitMiB}M console=ttyAML0,115200n8 console=tty0 no_console_suspend consoleblank=0 fsck.fix=yes fsck.repair=yes net.ifnames=0 init=/sbin/init`;
+  return `${BURN_PARTITION_ARGUMENT} root=UUID=${normalizeUuid(rootUuid)} rw rootwait rootfstype=ext4 mem=${memoryLimitMiB}M console=ttyAML0,115200n8 console=tty0 no_console_suspend consoleblank=0 fsck.fix=yes fsck.repair=yes net.ifnames=0 init=/sbin/init`;
 }
 
 export function assertBootPartitionSize(size) {
@@ -152,7 +214,8 @@ export function makeBoot(kernelPath, ramdiskPath, dtbPath, outputPath, cmdline) 
   const page = 2048;
   const kernel = fs.readFileSync(kernelPath);
   const ramdisk = fs.readFileSync(ramdiskPath);
-  const dtb = createP212MultiDtb(fs.readFileSync(dtbPath));
+  const dtb = fs.readFileSync(dtbPath);
+  inspectPlainFdt(dtb, 'boot second input');
   const command = Buffer.from(cmdline, 'ascii');
   if (command.length > 512) fail('Android boot v0 command line exceeds 512 bytes');
   const header = Buffer.alloc(page);
@@ -202,10 +265,16 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   if (command === 'boot' && args.length === 5) console.log(JSON.stringify(makeBoot(...args)));
   else if (command === 'sparse' && args.length === 3) console.log(JSON.stringify(makeSparse(args[0], args[1], Number(args[2]))));
   else if (command === 'select-kernel' && args.length > 0) console.log(selectKernelPath(args));
+  else if (command === 'select-dtb' && args.length > 0) console.log(selectDeviceTreePath(args.slice(1), args[0]));
+  else if (command === 'select-initrd' && args.length > 0) console.log(selectInitrdPath(args));
   else if (command === 'prepare-kernel' && args.length === 2) console.log(JSON.stringify(prepareBootKernel(...args)));
-  else if (command === 'command-line' && args.length === 1) console.log(createBootCommandLine(Number(args[0])));
-  else if (command === 'multi-dtb' && args.length === 2) console.log(JSON.stringify(writeP212MultiDtb(...args)));
-  else if (command === 'check-p212-boot' && args.length === 1) console.log(JSON.stringify(validateP212Boot(...args)));
+  else if (command === 'command-line' && args.length === 2) console.log(createBootCommandLine(Number(args[0]), args[1]));
+  else if (command === 'standalone-dtb' && args.length === 3) console.log(JSON.stringify(writeStandaloneDtb(...args)));
+  else if (command === 'check-standalone-dtb' && args.length === 1) console.log(JSON.stringify(validateStandaloneDtb(args[0])));
+  else if (command === 'check-boot-second' && args.length === 1) console.log(JSON.stringify(validateBootSecondDtb(...args)));
+  else if (command === 'check-dtb-pair' && args.length === 2) console.log(JSON.stringify(validateDtbPair(...args)));
+  else if (command === 'check-stock-boot' && (args.length === 1 || args.length === 2)) console.log(JSON.stringify(validateStockBoot(...args)));
+  else if (command === 'sparse-ext4-uuid' && args.length === 1) console.log(readSparseExt4Uuid(args[0]));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | command-line memory-limit-mib | multi-dtb input output | check-p212-boot boot | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

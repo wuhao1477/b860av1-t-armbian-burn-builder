@@ -162,3 +162,14 @@ test('validator includes userspace, kernel, DTB, service and media-size checks',
     assert.match(script, new RegExp(artifact.replace('.', '\\.')));
   }
 });
+
+test('burn builder derives the DTB name and UUID from the source partition', () => {
+  const builder = read('scripts/build-burn-image.sh');
+  const validator = read('scripts/validate-burn-image.sh');
+  assert.match(builder, /board_dtb=.*config\/board\.json/);
+  assert.match(builder, /select-dtb \"\$board_dtb\"/);
+  assert.match(builder, /blkid --match-tag UUID --output value \"\$root_part\"/);
+  assert.match(builder, /check-dtb-pair/);
+  assert.match(validator, /sparse-ext4-uuid/);
+  assert.match(validator, /check-dtb-pair/);
+});

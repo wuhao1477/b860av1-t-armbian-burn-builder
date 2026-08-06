@@ -12,10 +12,10 @@ cargo build --release --manifest-path "$ampack/Cargo.toml" >/dev/null
 for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf bootloader.PARTITION boot.PARTITION data.PARTITION meson1.dtb; do
   [[ -s "$tmp/unpack/$name" ]] || { echo "missing $name" >&2; exit 1; }
 done
-node "$root/scripts/burn-image.mjs" check-boot-size "$tmp/unpack/boot.PARTITION" >/dev/null
-node "$root/scripts/burn-image.mjs" check-p212-boot "$tmp/unpack/boot.PARTITION" >/dev/null
-expected_meson1=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$root/config/burn-inputs.json')).files['meson1.dtb'])")
-printf '%s  %s\n' "$expected_meson1" "$tmp/unpack/meson1.dtb" | sha256sum --check --status
+node "$root/scripts/burn-image.mjs" check-standalone-dtb "$tmp/unpack/meson1.dtb" >/dev/null
+root_uuid=$(node "$root/scripts/burn-image.mjs" sparse-ext4-uuid "$tmp/unpack/data.PARTITION")
+node "$root/scripts/burn-image.mjs" check-stock-boot "$tmp/unpack/boot.PARTITION" "$root_uuid" >/dev/null
+node "$root/scripts/burn-image.mjs" check-dtb-pair "$tmp/unpack/boot.PARTITION" "$tmp/unpack/meson1.dtb" >/dev/null
 magic=$(od -An -tx4 -j8 -N4 "$image" | tr -d ' ')
 [[ "$magic" == 27b51956 ]] || { echo "unexpected Amlogic v2 version magic: $magic" >&2; exit 1; }
 file "$tmp/unpack/data.PARTITION" | grep -q 'Android sparse' || { echo 'data.PARTITION is not sparse' >&2; exit 1; }
