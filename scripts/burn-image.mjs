@@ -7,10 +7,33 @@ import { basename } from 'node:path';
 import path from 'node:path';
 import { gunzipSync, gzipSync } from 'node:zlib';
 
-import { readSparseExt4Uuid } from '../src/android-sparse.mjs';
+import { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-sparse.mjs';
+import { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-roles.mjs';
+import { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
 import { validateStandaloneDtb } from '../src/burn-standalone-dtb.mjs';
+import { validateDirectBootContract } from '../src/direct-boot-contract.mjs';
+import {
+  inspectDosMbr,
+  inspectFatBootImage,
+  inspectFatBootFiles,
+  inspectUbootEnvironment,
+  validateEmmcBootChain,
+  writeDosMbr,
+  writeUbootEnvironment,
+} from '../src/emmc-boot-chain.mjs';
 
-export { readSparseExt4Uuid } from '../src/android-sparse.mjs';
+export { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-sparse.mjs';
+export { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-roles.mjs';
+export { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
+export {
+  inspectDosMbr,
+  inspectFatBootImage,
+  inspectFatBootFiles,
+  inspectUbootEnvironment,
+  validateEmmcBootChain,
+  writeDosMbr,
+  writeUbootEnvironment,
+} from '../src/emmc-boot-chain.mjs';
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
 const STOCK_BOOTM_BYTES = 64 * 1024 * 1024;
@@ -86,6 +109,13 @@ function extractBootSecond(image) {
   return image.subarray(offset, offset + size);
 }
 
+export function extractBootSecondDtb(bootPath, outputPath) {
+  const second = extractBootSecond(fs.readFileSync(bootPath));
+  const inspected = inspectPlainFdt(second, 'boot second');
+  fs.writeFileSync(outputPath, second);
+  return inspected;
+}
+
 function bootPayload(image, sizeOffset, start) {
   const size = image.readUInt32LE(sizeOffset);
   if (size === 0 || start + size > image.length) fail('Android boot payload is invalid');
@@ -106,7 +136,7 @@ function inspectArm64Kernel(compressed, loadAddress) {
   if (!Number.isSafeInteger(textOffset) || textOffset !== loadAddress) {
     fail('stock boot kernel text offset does not match its load address');
   }
-  return { size: kernel.length, textOffset };
+  return { payload: kernel, size: kernel.length, textOffset };
 }
 
 export function validateStockBoot(bootPath, expectedRootUuid) {
@@ -126,6 +156,7 @@ export function validateStockBoot(bootPath, expectedRootUuid) {
     fail('Android boot ramdisk contains a legacy uInitrd header');
   }
   const kernel = inspectArm64Kernel(kernelPart.payload, kernelLoadAddress);
+  const directBoot = validateDirectBootContract(kernel.payload, ramdiskPart.payload);
   const second = inspectPlainFdt(secondPart.payload, 'boot second');
   const command = inspectBootCommandLine(image);
   if (expectedRootUuid !== undefined && command.rootUuid !== normalizeUuid(expectedRootUuid)) {
@@ -136,6 +167,7 @@ export function validateStockBoot(bootPath, expectedRootUuid) {
     kernelUncompressedSize: kernel.size, kernelLoadAddress, kernelTextOffset: kernel.textOffset,
     ramdiskSize: ramdiskPart.payload.length, secondSize: secondPart.payload.length,
     secondFdtSize: second.fdtSize, rootUuid: command.rootUuid,
+    ...directBoot,
   };
 }
 
@@ -273,8 +305,49 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'check-standalone-dtb' && args.length === 1) console.log(JSON.stringify(validateStandaloneDtb(args[0])));
   else if (command === 'check-boot-second' && args.length === 1) console.log(JSON.stringify(validateBootSecondDtb(...args)));
   else if (command === 'check-dtb-pair' && args.length === 2) console.log(JSON.stringify(validateDtbPair(...args)));
+  else if (command === 'extract-boot-second' && args.length === 2) console.log(JSON.stringify(
+    extractBootSecondDtb(...args),
+  ));
   else if (command === 'check-stock-boot' && (args.length === 1 || args.length === 2)) console.log(JSON.stringify(validateStockBoot(...args)));
   else if (command === 'sparse-ext4-uuid' && args.length === 1) console.log(readSparseExt4Uuid(args[0]));
+  else if (command === 'check-sparse-capacity' && args.length === 4) console.log(JSON.stringify(
+    validateSparseCapacity(args[0], Number(args[1]), Number(args[2]), Number(args[3])),
+  ));
+  else if (command === 'report' && args.length === 5) console.log(JSON.stringify(await buildBurnReport({
+    burnPath: args[0], rawSourcePath: args[1], bootContractPath: args[2],
+    dtbContractPath: args[3], rootfsContractPath: args[4],
+  })));
+  else if (command === 'check-report' && args.length === 6) console.log(JSON.stringify(await validateBurnReport({
+    reportPath: args[0], burnPath: args[1], rawSourcePath: args[2], bootContractPath: args[3],
+    dtbContractPath: args[4], rootfsContractPath: args[5],
+  })));
+  else if (command === 'uboot-env' && args.length === 2) console.log(JSON.stringify(
+    writeUbootEnvironment(args[0], args[1]),
+  ));
+  else if (command === 'check-uboot-env' && args.length === 1) console.log(JSON.stringify(
+    inspectUbootEnvironment(args[0]),
+  ));
+  else if (command === 'dos-mbr' && args.length === 3) console.log(JSON.stringify(
+    writeDosMbr(args[0], Number(args[1]), Number(args[2])),
+  ));
+  else if (command === 'check-dos-mbr' && args.length === 1) console.log(JSON.stringify(
+    inspectDosMbr(args[0]),
+  ));
+  else if (command === 'check-fat-boot' && args.length === 1) console.log(JSON.stringify(
+    inspectFatBootImage(args[0]),
+  ));
+  else if (command === 'check-emmc-chain' && args.length === 4) console.log(JSON.stringify(
+    validateEmmcBootChain(...args),
+  ));
+  else if (command === 'check-burn-dtb-roles' && args.length === 2) console.log(JSON.stringify(
+    validateBurnDtbRoles(...args),
+  ));
+  else if (command === 'replace-linux-target-dtb' && args.length === 3) console.log(JSON.stringify(
+    replaceLinuxTargetDtb(...args),
+  ));
+  else if (command === 'hybrid-dtb' && args.length === 3) console.log(JSON.stringify(
+    replaceLinuxTargetDtb(...args),
+  ));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

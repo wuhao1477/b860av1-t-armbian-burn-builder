@@ -10,6 +10,13 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import * as burnImage from '../scripts/burn-image.mjs';
 
 const cli = fileURLToPath(new URL('../scripts/burn-image.mjs', import.meta.url));
+const TEST_KERNEL_CONFIG = [
+  'CONFIG_BLK_CMDLINE_PARSER=y', 'CONFIG_BLK_DEV_INITRD=y', 'CONFIG_CMDLINE_PARTITION=y',
+  'CONFIG_DRM_DW_HDMI=y', 'CONFIG_DRM_MESON=y', 'CONFIG_DRM_MESON_DW_HDMI=y',
+  'CONFIG_DWMAC_MESON=y', 'CONFIG_EXT4_FS=y', 'CONFIG_IKCONFIG=y',
+  'CONFIG_MESON_GXL_PHY=y', 'CONFIG_MMC_BLOCK=y', 'CONFIG_MMC_MESON_GX=y',
+  'CONFIG_PHY_MESON_GXL_USB2=y', 'CONFIG_RD_GZIP=y', 'CONFIG_STMMAC_ETH=y',
+].join('\n') + '\n';
 
 function fixture(context) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-burn-image-'));
@@ -18,11 +25,15 @@ function fixture(context) {
 }
 
 function arm64Image(size = 4096) {
+  const embeddedConfig = Buffer.concat([
+    Buffer.from('IKCFG_ST'), gzipSync(Buffer.from(TEST_KERNEL_CONFIG)), Buffer.from('IKCFG_ED'),
+  ]);
   const image = Buffer.alloc(size, 0x5a);
   image.fill(0, 0, 64);
   image.writeBigUInt64LE(0x01080000n, 8);
   image.writeBigUInt64LE(BigInt(size), 16);
   image.write('ARMd', 56, 'ascii');
+  embeddedConfig.copy(image, 256);
   return image;
 }
 
@@ -244,7 +255,10 @@ test('stock boot validation proves the complete Linux boot payload contract', (c
     'function',
     'missing complete stock boot validator',
   );
-  assert.deepEqual(burnImage.validateStockBoot(boot), {
+  const result = burnImage.validateStockBoot(boot);
+  assert.match(result.kernelConfigSha256, /^[0-9a-f]{64}$/);
+  delete result.kernelConfigSha256;
+  assert.deepEqual(result, {
     size: fs.statSync(boot).size,
     pageSize: 2048,
     kernelCompressedSize: fs.statSync(kernel).size,
@@ -255,6 +269,16 @@ test('stock boot validation proves the complete Linux boot payload contract', (c
     secondSize: dtbBytes.length,
     secondFdtSize: dtbBytes.length,
     rootUuid: '50031852-ee90-4285-ada7-ab9dc14670c9',
+    initrdCodec: 'gzip',
+    initrdKernelConfig: 'CONFIG_RD_GZIP',
+    requiredKernelConfig: {
+      CONFIG_BLK_CMDLINE_PARSER: 'y', CONFIG_BLK_DEV_INITRD: 'y',
+      CONFIG_CMDLINE_PARTITION: 'y', CONFIG_DRM_DW_HDMI: 'y', CONFIG_DRM_MESON: 'y',
+      CONFIG_DRM_MESON_DW_HDMI: 'y', CONFIG_DWMAC_MESON: 'y', CONFIG_EXT4_FS: 'y',
+      CONFIG_IKCONFIG: 'y', CONFIG_MESON_GXL_PHY: 'y', CONFIG_MMC_BLOCK: 'y',
+      CONFIG_MMC_MESON_GX: 'y', CONFIG_PHY_MESON_GXL_USB2: 'y',
+      CONFIG_RD_GZIP: 'y', CONFIG_STMMAC_ETH: 'y',
+    },
   });
 });
 

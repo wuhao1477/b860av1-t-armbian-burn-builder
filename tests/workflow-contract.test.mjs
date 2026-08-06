@@ -326,3 +326,40 @@ test('manual device verification validates first and publishes unique assets sec
   assert.doesNotMatch(workflow, /gh release delete|gh release edit/);
   assert.doesNotMatch(workflow, /\.img\.gz/);
 });
+
+test('burn workflow follows the public raw release and publishes direct-boot contracts', () => {
+  const workflow = read('.github/workflows/weekly-burn-build.yml');
+  const contracts = ['boot-contract.json', 'dtb-contract.json', 'rootfs-contract.json'];
+
+  assert.match(workflow, /validate-burn-image\.sh out\/burn\.img out\/burn-report\.json/);
+  for (const contract of contracts) {
+    const matches = workflow.match(new RegExp(contract.replace('.', '\\.'), 'g')) ?? [];
+    assert.ok(matches.length >= 3, `${contract} is not checksummed, uploaded, and published`);
+  }
+  assert.match(
+    workflow,
+    /sha256sum[^\n]+boot-contract\.json[^\n]+dtb-contract\.json[^\n]+rootfs-contract\.json[^\n]+burn-report\.json/,
+  );
+  assert.match(workflow, /sha256sum --check/);
+  assert.match(workflow, /gh release download/);
+  assert.match(workflow, /validate-candidate-artifacts\.mjs/);
+  assert.match(workflow, /recipe_digest/);
+  for (const recipeInput of [
+    'config/burn-tooling.json',
+    'board-inputs/meson1.dtb',
+    'src/burn-dtb-roles.mjs',
+    'src/direct-boot-contract.mjs',
+    'src/emmc-boot-chain.mjs',
+  ]) {
+    assert.match(workflow, new RegExp(recipeInput.replaceAll('.', '\\.')));
+  }
+  assert.match(workflow, /SOURCE_REPOSITORY:\s*wuhao1477\/b860av1-t-armbian-builder/);
+  assert.match(workflow, /gh release download "\$PUBLIC_RELEASE" --repo "\$SOURCE_REPOSITORY"/);
+  assert.match(workflow, /gh release create[^\n]+--draft/);
+  assert.match(workflow, /draft_release_ready\(\)[\s\S]+release_ready=false[\s\S]+for attempt in 1 2 3 4 5[\s\S]+release_ready=true/);
+  assert.match(workflow, /gh release upload/);
+  assert.match(workflow, /remote_asset_matches|release-assets\.json/);
+  assert.match(workflow, /gh release edit[^\n]+--draft=false/);
+  assert.match(workflow, /schedule:\s*\n\s*- cron:\s*['"]23 3 \* \* 1['"]/);
+  assert.doesNotMatch(workflow, /workflow_run:/);
+});

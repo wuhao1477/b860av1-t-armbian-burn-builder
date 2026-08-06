@@ -16,10 +16,32 @@ function fixture(context) {
 }
 
 function arm64Image() {
-  const image = Buffer.alloc(4096);
+  const config = [
+    'CONFIG_BLK_CMDLINE_PARSER=y',
+    'CONFIG_BLK_DEV_INITRD=y',
+    'CONFIG_CMDLINE_PARTITION=y',
+    'CONFIG_DRM_DW_HDMI=y',
+    'CONFIG_DRM_MESON=y',
+    'CONFIG_DRM_MESON_DW_HDMI=y',
+    'CONFIG_DWMAC_MESON=y',
+    'CONFIG_EXT4_FS=y',
+    'CONFIG_IKCONFIG=y',
+    'CONFIG_MESON_GXL_PHY=y',
+    'CONFIG_MMC_BLOCK=y',
+    'CONFIG_MMC_MESON_GX=y',
+    'CONFIG_PHY_MESON_GXL_USB2=y',
+    'CONFIG_RD_GZIP=y',
+    'CONFIG_STMMAC_ETH=y',
+  ].join('\n') + '\n';
+  const embedded = Buffer.concat([
+    Buffer.from('IKCFG_ST'), gzipSync(Buffer.from(config)), Buffer.from('IKCFG_ED'),
+  ]);
+  const image = Buffer.alloc(4096, 0x5a);
+  image.fill(0, 0, 64);
   image.writeBigUInt64LE(0x01080000n, 8);
   image.writeBigUInt64LE(BigInt(image.length), 16);
   image.write('ARMd', 56, 'ascii');
+  embedded.copy(image, 256);
   return image;
 }
 
@@ -54,6 +76,14 @@ test('burn output binds boot second to the exact standalone DTB', (context) => {
     () => burnImage.validateDtbPair(boot, dtb),
     /boot second and meson1\.dtb differ/,
   );
+});
+
+test('burn output can export the boot second FDT for independent package validation', (context) => {
+  const directory = fixture(context);
+  const { boot, dtb } = createBoot(directory, `root=UUID=${ROOT_UUID}`);
+  const extracted = path.join(directory, 'boot-second.dtb');
+  burnImage.extractBootSecondDtb(boot, extracted);
+  assert.deepEqual(fs.readFileSync(extracted), fs.readFileSync(dtb));
 });
 
 test('stock boot validation binds bootargs to the copied ext4 UUID', (context) => {
