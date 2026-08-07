@@ -51,6 +51,12 @@ test('CI installs the device-tree tools used by hardware capability tests', () =
   assert.match(testJob, /apt-get install --yes[^\n]*device-tree-compiler/);
 });
 
+test('CI installs mtools used by FAT boot contract tests', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  const testJob = workflow.slice(workflow.indexOf('\n  test:'), workflow.indexOf('\n  source-built-uboot:'));
+  assert.match(testJob, /apt-get install --yes[^\n]*mtools/);
+});
+
 test('detector fails closed and only compares complete non-draft releases', () => {
   const workflow = read('.github/workflows/weekly-build.yml');
 
