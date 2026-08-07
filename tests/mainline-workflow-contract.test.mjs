@@ -69,6 +69,7 @@ test('weekly burn workflow builds and publishes extlinux boot contracts', () => 
   const workflow = read('.github/workflows/weekly-burn-build.yml');
 
   assert.match(workflow, /gcc-aarch64-linux-gnu/);
+  assert.match(workflow, /libgnutls28-dev/);
   assert.match(workflow, /scripts\/build-burn-image\.sh/);
   assert.match(workflow, /scripts\/validate-burn-image\.sh/);
   assert.match(workflow, /mainline-fip-contract\.json/);

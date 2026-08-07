@@ -89,7 +89,7 @@ jobs:
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes curl device-tree-compiler dosfstools e2fsprogs file gcc-aarch64-linux-gnu git gzip kpartx mtools u-boot-tools util-linux xz-utils
+          sudo apt-get install --yes curl device-tree-compiler dosfstools e2fsprogs file gcc-aarch64-linux-gnu git gzip kpartx libgnutls28-dev mtools u-boot-tools util-linux xz-utils
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           toolchain: stable
