@@ -51,12 +51,15 @@ jobs:
             .github/workflows/weekly-burn-build.yml \
             board-inputs/DDR.USB board-inputs/UBOOT.USB board-inputs/aml_sdc_burn.UBOOT \
             board-inputs/aml_sdc_burn.ini board-inputs/platform.conf board-inputs/bootloader.PARTITION \
-            board-inputs/meson1.dtb board-overlays/burn-partitions.dtso \
+            board-inputs/meson1.dtb \
             config/board.json config/burn-inputs.json config/burn-tooling.json \
-            scripts/build-burn-image.sh scripts/burn-image.mjs \
+            config/mainline-boot.json board-overlays/burn-partitions.dtso \
+            patches/u-boot/v2026.01/add-board-bestv-r3300-l.patch \
+            patches/u-boot/v2026.01/b860-emmc-50mhz.patch \
+            scripts/build-burn-image.sh scripts/build-mainline-uboot.sh scripts/burn-image.mjs \
+            scripts/mainline-boot.mjs \
             scripts/validate-burn-image.sh src/android-sparse.mjs src/burn-report.mjs \
-            src/burn-dtb-roles.mjs src/burn-standalone-dtb.mjs \
-            src/direct-boot-contract.mjs src/emmc-boot-chain.mjs \
+            src/emmc-boot-chain.mjs src/mainline-boot-contract.mjs \
             | sha256sum | awk '{print $1}')
           fingerprint=$(printf '%s\n%s\n%s\n%s\n' "$release_tag" "$asset_name" "$asset_digest" "$recipe_digest" | sha256sum | awk '{print $1}')
           previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft,isPrerelease --jq '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("b860-burn-")))] | first | .tagName // empty')
@@ -86,7 +89,7 @@ jobs:
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes curl device-tree-compiler e2fsprogs file git gzip kpartx mtools u-boot-tools util-linux xz-utils
+          sudo apt-get install --yes curl device-tree-compiler dosfstools e2fsprogs file gcc-aarch64-linux-gnu git gzip kpartx mtools u-boot-tools util-linux xz-utils
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           toolchain: stable
@@ -123,7 +126,7 @@ jobs:
           set -Eeuo pipefail
           printf 'Input fingerprint: %s\nPublic release: %s\nStatus: format-valid / hardware-unverified\n' \
             "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" > out/RELEASE.md
-          (cd out && sha256sum burn.img burn.img.xz boot-contract.json dtb-contract.json rootfs-contract.json burn-report.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
+          (cd out && sha256sum burn.img burn.img.xz emmc-boot-contract.json mainline-fip-contract.json rootfs-contract.json u-boot-build.json burn-report.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: b860-burn-output
@@ -131,9 +134,10 @@ jobs:
             out/burn.img
             out/burn.img.xz
             out/SHA256SUMS
-            out/boot-contract.json
-            out/dtb-contract.json
+            out/emmc-boot-contract.json
+            out/mainline-fip-contract.json
             out/rootfs-contract.json
+            out/u-boot-build.json
             out/burn-report.json
             out/RELEASE.md
           retention-days: 1
@@ -163,9 +167,10 @@ jobs:
             out/burn.img
             out/burn.img.xz
             out/SHA256SUMS
-            out/boot-contract.json
-            out/dtb-contract.json
+            out/emmc-boot-contract.json
+            out/mainline-fip-contract.json
             out/rootfs-contract.json
+            out/u-boot-build.json
             out/burn-report.json
             out/RELEASE.md
           )

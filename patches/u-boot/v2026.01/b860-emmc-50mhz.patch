@@ -1,0 +1,10 @@
+diff --git a/dts/upstream/src/arm64/amlogic/meson-gxl-s905x-bestv-r3300-l.dts b/dts/upstream/src/arm64/amlogic/meson-gxl-s905x-bestv-r3300-l.dts
+index 29af4287..f17ca6a9 100644
+--- a/dts/upstream/src/arm64/amlogic/meson-gxl-s905x-bestv-r3300-l.dts
++++ b/dts/upstream/src/arm64/amlogic/meson-gxl-s905x-bestv-r3300-l.dts
+@@ -212,3 +212,4 @@
+ &sd_emmc_c {
+-	mmc-hs400-1_8v;
++	/delete-property/ mmc-hs400-1_8v;
++	max-frequency = <50000000>;
+ };
