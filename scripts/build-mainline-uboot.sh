@@ -66,6 +66,9 @@ git -C "$uboot_src" apply "$emmc_patch_path"
 make -C "$uboot_src" O="$uboot_build" CROSS_COMPILE="$cross" "$defconfig"
 "$uboot_src/scripts/config" --file "$uboot_build/.config" \
   --enable ENV_IS_NOWHERE \
+  --enable VIDEO \
+  --enable VIDEO_MESON \
+  --enable VIDEO_DT_SIMPLEFB \
   --set-val BOOTDELAY 0
 make -C "$uboot_src" O="$uboot_build" CROSS_COMPILE="$cross" olddefconfig
 
@@ -73,6 +76,12 @@ grep -qx 'CONFIG_ENV_IS_NOWHERE=y' "$uboot_build/.config" || {
   echo 'mainline U-Boot must ignore the stock persistent environment' >&2
   exit 1
 }
+for option in CONFIG_VIDEO CONFIG_VIDEO_MESON CONFIG_VIDEO_DT_SIMPLEFB; do
+  grep -qx "$option=y" "$uboot_build/.config" || {
+    echo "mainline U-Boot HDMI option is not enabled: $option" >&2
+    exit 1
+  }
+done
 
 jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
 SOURCE_DATE_EPOCH=0 KBUILD_BUILD_USER=github-actions KBUILD_BUILD_HOST=b860-builder \

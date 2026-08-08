@@ -49,6 +49,14 @@ test('public burn builder packages mainline BL33, FAT16 extlinux and sparse root
   assert.match(ubootBuilder, /gxlimg[^\n]+-t bl3x/);
   assert.match(ubootBuilder, /--bl301/);
   assert.match(ubootBuilder, /CONFIG_ENV_IS_NOWHERE/);
+  assert.match(ubootBuilder, /--enable VIDEO/);
+  assert.match(ubootBuilder, /--enable VIDEO_MESON/);
+  assert.match(ubootBuilder, /--enable VIDEO_DT_SIMPLEFB/);
+  assert.match(
+    ubootBuilder,
+    /for option in CONFIG_VIDEO CONFIG_VIDEO_MESON CONFIG_VIDEO_DT_SIMPLEFB/,
+  );
+  assert.match(ubootBuilder, /grep -qx "\$option=y"/);
   assert.doesNotMatch(ubootBuilder, /CONFIG_BOOTCOMMAND|--set-str BOOTCOMMAND/);
 });
 
