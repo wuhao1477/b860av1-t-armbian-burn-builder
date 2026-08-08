@@ -51,6 +51,12 @@ test('CI installs the device-tree tools used by hardware capability tests', () =
   assert.match(testJob, /apt-get install --yes[^\n]*device-tree-compiler/);
 });
 
+test('CI installs mtools used by FAT boot contract tests', () => {
+  const workflow = read('.github/workflows/ci.yml');
+  const testJob = workflow.slice(workflow.indexOf('\n  test:'), workflow.indexOf('\n  source-built-uboot:'));
+  assert.match(testJob, /apt-get install --yes[^\n]*mtools/);
+});
+
 test('detector fails closed and only compares complete non-draft releases', () => {
   const workflow = read('.github/workflows/weekly-build.yml');
 
@@ -327,9 +333,11 @@ test('manual device verification validates first and publishes unique assets sec
   assert.doesNotMatch(workflow, /\.img\.gz/);
 });
 
-test('burn workflow follows the public raw release and publishes direct-boot contracts', () => {
+test('burn workflow follows the public raw release and publishes eMMC boot contracts', () => {
   const workflow = read('.github/workflows/weekly-burn-build.yml');
-  const contracts = ['boot-contract.json', 'dtb-contract.json', 'rootfs-contract.json'];
+  const contracts = [
+    'emmc-boot-contract.json', 'mainline-fip-contract.json', 'rootfs-contract.json',
+  ];
 
   assert.match(workflow, /validate-burn-image\.sh out\/burn\.img out\/burn-report\.json/);
   for (const contract of contracts) {
@@ -338,7 +346,7 @@ test('burn workflow follows the public raw release and publishes direct-boot con
   }
   assert.match(
     workflow,
-    /sha256sum[^\n]+boot-contract\.json[^\n]+dtb-contract\.json[^\n]+rootfs-contract\.json[^\n]+burn-report\.json/,
+    /sha256sum[^\n]+emmc-boot-contract\.json[^\n]+mainline-fip-contract\.json[^\n]+rootfs-contract\.json[^\n]+burn-report\.json/,
   );
   assert.match(workflow, /sha256sum --check/);
   assert.match(workflow, /gh release download/);
@@ -347,11 +355,10 @@ test('burn workflow follows the public raw release and publishes direct-boot con
   for (const recipeInput of [
     'board-overlays/burn-partitions.dtso',
     'config/burn-tooling.json',
+    'config/mainline-boot.json',
     'board-inputs/meson1.dtb',
-    'src/burn-dtb-roles.mjs',
-    'src/burn-standalone-dtb.mjs',
-    'src/direct-boot-contract.mjs',
     'src/emmc-boot-chain.mjs',
+    'src/mainline-boot-contract.mjs',
   ]) {
     assert.match(workflow, new RegExp(recipeInput.replaceAll('.', '\\.')));
   }

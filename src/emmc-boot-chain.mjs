@@ -3,18 +3,21 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { crc32 } from 'node:zlib';
+import { gunzipSync } from 'node:zlib';
 
 import { inspectSparseImage, readSparseExt4Uuid } from './android-sparse.mjs';
 
 const SECTOR_BYTES = 512;
 const MIB = 1024 * 1024;
-const ENV_BYTES = 64 * 1024;
-const ENV_DATA_BYTES = ENV_BYTES - 4;
-const FAT_BOOT_BYTES = 256 * MIB;
-const BOOT_START_MIB = 1144;
+const FAT_BOOT_BYTES = 32 * MIB;
+const BOOT_START_MIB = 1104;
 const ROOT_START_MIB = 2176;
-const EMMC_AUTOSCRIPT = 'if fatload mmc 1 1020000 emmc_autoscript; then autoscr 1020000; fi;';
+const BURN_PARTITIONS = [
+  '1.PARTITION',
+  'bootloader.PARTITION',
+  'boot.PARTITION',
+  'data.PARTITION',
+];
 
 function fail(message) {
   throw new Error(message);
@@ -25,64 +28,6 @@ function sectors(bytes, label) {
     fail(`${label} size must be a positive multiple of 512 bytes`);
   }
   return bytes / SECTOR_BYTES;
-}
-
-function readTemplate(templatePath) {
-  const template = JSON.parse(fs.readFileSync(templatePath, 'utf8'));
-  const source = Buffer.from(template.dataBase64 ?? '', 'base64');
-  if (template.schemaVersion !== 1 || source.length !== template.source?.length
-      || template.source?.variableCount !== 81 || source.at(-1) !== 0) {
-    fail('stock U-Boot environment template is invalid');
-  }
-  return { source, expectedCount: template.source.variableCount };
-}
-
-function parseVariables(data) {
-  const variables = {};
-  let count = 0;
-  for (const entry of data.toString('latin1').split('\0')) {
-    if (entry.length === 0) break;
-    const separator = entry.indexOf('=');
-    if (separator <= 0) fail('U-Boot environment contains an invalid variable');
-    const name = entry.slice(0, separator);
-    if (Object.hasOwn(variables, name)) fail(`U-Boot environment repeats ${name}`);
-    variables[name] = entry.slice(separator + 1);
-    count += 1;
-  }
-  return { variables, variableCount: count };
-}
-
-function encodeVariables(variables) {
-  const entries = Object.entries(variables).map(([name, value]) => `${name}=${value}`);
-  const payload = Buffer.from(`${entries.join('\0')}\0\0`, 'latin1');
-  if (payload.length > ENV_DATA_BYTES) fail('U-Boot environment exceeds 64 KiB');
-  const data = Buffer.alloc(ENV_DATA_BYTES);
-  payload.copy(data);
-  return data;
-}
-
-export function writeUbootEnvironment(templatePath, outputPath) {
-  const { source, expectedCount } = readTemplate(templatePath);
-  const parsed = parseVariables(source);
-  if (parsed.variableCount !== expectedCount) fail('stock U-Boot variable count is invalid');
-  parsed.variables.bootcmd = 'run start_emmc_autoscript; run storeboot';
-  parsed.variables.upgrade_step = '2';
-  parsed.variables.start_emmc_autoscript = EMMC_AUTOSCRIPT;
-  const data = encodeVariables(parsed.variables);
-  const image = Buffer.alloc(ENV_BYTES);
-  image.writeUInt32LE(crc32(data), 0);
-  data.copy(image, 4);
-  fs.writeFileSync(outputPath, image);
-  return inspectUbootEnvironment(outputPath);
-}
-
-export function inspectUbootEnvironment(imagePath) {
-  const image = fs.readFileSync(imagePath);
-  if (image.length !== ENV_BYTES) fail('env.PARTITION must be exactly 65536 bytes');
-  const storedCrc32 = image.readUInt32LE(0);
-  const actualCrc32 = crc32(image.subarray(4));
-  if (storedCrc32 !== actualCrc32) fail('env.PARTITION CRC32 is invalid');
-  return { size: image.length, storedCrc32, ...parseVariables(image.subarray(4)) };
 }
 
 function writePartition(image, index, type, startLba, count) {
@@ -105,7 +50,7 @@ export function writeDosMbr(outputPath, bootBytes, rootBytes) {
   }
   if (rootStartLba + rootSectors > 0xffffffff) fail('root filesystem exceeds DOS MBR limits');
   const image = Buffer.alloc(SECTOR_BYTES);
-  writePartition(image, 1, 0x0c, bootStartLba, bootSectors);
+  writePartition(image, 1, 0x0e, bootStartLba, bootSectors);
   writePartition(image, 2, 0x83, rootStartLba, rootSectors);
   image.writeUInt16LE(0xaa55, 510);
   fs.writeFileSync(outputPath, image);
@@ -121,42 +66,47 @@ export function inspectDosMbr(imagePath) {
   for (let index = 1; index <= 4; index += 1) {
     const offset = 446 + ((index - 1) * 16);
     const type = image[offset + 4];
-    const sectorsValue = image.readUInt32LE(offset + 12);
-    if (type === 0 && sectorsValue === 0) continue;
+    const sectorCount = image.readUInt32LE(offset + 12);
+    if (type === 0 && sectorCount === 0) continue;
     const status = image[offset];
     if (![0, 0x80].includes(status)) fail(`DOS MBR partition ${index} has invalid status`);
-    partitions.push({ index, bootable: status === 0x80, type,
-      startLba: image.readUInt32LE(offset + 8), sectors: sectorsValue });
+    partitions.push({
+      index,
+      bootable: status === 0x80,
+      type,
+      startLba: image.readUInt32LE(offset + 8),
+      sectors: sectorCount,
+    });
   }
-  if (partitions.length !== 2 || partitions[0].type !== 0x0c || partitions[1].type !== 0x83) {
-    fail('DOS MBR must contain FAT32 boot and Linux root partitions');
+  if (partitions.length !== 2 || partitions[0].type !== 0x0e || partitions[1].type !== 0x83) {
+    fail('DOS MBR must contain FAT16 boot and Linux root partitions');
   }
   return { size: image.length, partitions };
 }
 
 export function inspectFatBootImage(imagePath) {
   const size = fs.statSync(imagePath).size;
-  const image = Buffer.alloc(SECTOR_BYTES);
+  const bootSector = Buffer.alloc(SECTOR_BYTES);
   const descriptor = fs.openSync(imagePath, 'r');
   try {
-    if (fs.readSync(descriptor, image, 0, image.length, 0) !== image.length) {
-      fail('system.PARTITION boot sector is truncated');
+    if (fs.readSync(descriptor, bootSector, 0, bootSector.length, 0) !== bootSector.length) {
+      fail('boot.PARTITION boot sector is truncated');
     }
   } finally {
     fs.closeSync(descriptor);
   }
-  if (size !== FAT_BOOT_BYTES || image.readUInt16LE(510) !== 0xaa55) {
-    fail('system.PARTITION is not a FAT boot filesystem');
+  if (size !== FAT_BOOT_BYTES || bootSector.readUInt16LE(510) !== 0xaa55) {
+    fail('boot.PARTITION is not a 32 MiB FAT boot filesystem');
   }
-  const bytesPerSector = image.readUInt16LE(11);
-  const sectorsPerCluster = image[13];
-  const totalSectors16 = image.readUInt16LE(19);
-  const totalSectors = totalSectors16 || image.readUInt32LE(32);
-  const fatType = image.toString('ascii', 82, 90).trim();
+  const bytesPerSector = bootSector.readUInt16LE(11);
+  const sectorsPerCluster = bootSector[13];
+  const totalSectors16 = bootSector.readUInt16LE(19);
+  const totalSectors = totalSectors16 || bootSector.readUInt32LE(32);
+  const fatType = bootSector.toString('ascii', 54, 62).trim();
   if (![512, 1024, 2048, 4096].includes(bytesPerSector)
       || sectorsPerCluster === 0 || (sectorsPerCluster & (sectorsPerCluster - 1)) !== 0
-      || totalSectors * bytesPerSector !== size || fatType !== 'FAT32') {
-    fail('system.PARTITION FAT32 geometry is invalid');
+      || totalSectors * bytesPerSector !== size || fatType !== 'FAT16') {
+    fail('boot.PARTITION FAT16 geometry is invalid');
   }
   return { bytesPerSector, sectorsPerCluster, size, totalSectors, type: fatType };
 }
@@ -167,52 +117,121 @@ function copyFatFile(imagePath, fatPath, outputPath) {
       stdio: ['ignore', 'ignore', 'pipe'],
     });
   } catch {
-    fail(`system.PARTITION lacks ${fatPath}`);
+    fail(`boot.PARTITION lacks ${fatPath}`);
   }
   const contents = fs.readFileSync(outputPath);
-  if (contents.length === 0) fail(`system.PARTITION contains an empty ${fatPath}`);
-  return { path: fatPath, size: contents.length,
-    sha256: crypto.createHash('sha256').update(contents).digest('hex'), contents };
+  if (contents.length === 0) fail(`boot.PARTITION contains an empty ${fatPath}`);
+  return {
+    path: fatPath,
+    size: contents.length,
+    sha256: crypto.createHash('sha256').update(contents).digest('hex'),
+    contents,
+  };
 }
 
-function parseBootPaths(contents) {
-  const values = {};
-  for (const line of contents.toString('utf8').split(/\r?\n/u)) {
-    const match = line.match(/^([A-Z][A-Z0-9_]*)=(.*)$/u);
-    if (match) values[match[1]] = match[2];
+function normalizeUuid(value) {
+  if (typeof value !== 'string'
+      || !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(value)) {
+    fail('extlinux.conf contains an invalid root filesystem UUID');
   }
-  if (!values.APPEND?.includes('root=UUID=')) fail('uEnv.txt lacks root filesystem arguments');
-  return ['LINUX', 'INITRD', 'FDT'].map((name) => {
+  return value.toLowerCase();
+}
+
+function parseExtlinuxConfig(contents) {
+  const source = contents.toString('utf8');
+  if (/storeboot|imgread|ANDROID!|blkdevparts/iu.test(source)) {
+    fail('extlinux.conf contains a prohibited Android boot marker');
+  }
+  const values = {};
+  for (const line of source.split(/\r?\n/u)) {
+    const match = line.match(/^\s*(LINUX|INITRD|FDT|APPEND)\s+(.+?)\s*$/u);
+    if (match) {
+      if (Object.hasOwn(values, match[1])) fail(`extlinux.conf repeats ${match[1]}`);
+      values[match[1]] = match[2];
+    }
+  }
+  const paths = ['LINUX', 'INITRD', 'FDT'].map((name) => {
     const value = values[name];
-    if (typeof value !== 'string' || !/^\/?[A-Za-z0-9._+/-]+$/u.test(value)
+    if (typeof value !== 'string' || !/^\/[A-Za-z0-9._+/-]+$/u.test(value)
         || value.split('/').includes('..')) {
-      fail(`uEnv.txt contains an invalid ${name} path`);
+      fail(`extlinux.conf contains an invalid ${name} path`);
     }
     return value;
   });
+  if (paths[0] !== '/Image.gz' || paths[1] !== '/initrd.img'
+      || paths[2] !== '/dtb/amlogic/meson-gxl-s905x-p212-b860av11t.dtb') {
+    fail('extlinux.conf does not select the B860 Armbian boot files');
+  }
+  const rootArguments = (values.APPEND ?? '').split(/\s+/u)
+    .filter((value) => value.startsWith('root=UUID='));
+  if (rootArguments.length !== 1) fail('extlinux.conf lacks one root filesystem UUID argument');
+  return {
+    paths,
+    rootUuid: normalizeUuid(rootArguments[0].slice('root=UUID='.length)),
+  };
 }
 
-export function inspectFatBootFiles(imagePath) {
+function validateBootPayloads(files) {
+  const kernel = gunzipSync(files[1].contents);
+  if (kernel.length < 64 || kernel.toString('ascii', 56, 60) !== 'ARMd') {
+    fail('Image.gz is not a compressed ARM64 kernel Image');
+  }
+  const dtb = files[3].contents;
+  if (dtb.length < 8 || dtb.readUInt32BE(0) !== 0xd00dfeed
+      || dtb.readUInt32BE(4) > dtb.length) {
+    fail('B860 device tree is invalid');
+  }
+}
+
+function inspectFatBootContents(imagePath) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-fat-files-'));
   try {
-    const fixed = ['emmc_autoscript', 'u-boot.emmc', 'uEnv.txt'].map((name, index) => (
-      copyFatFile(imagePath, name, path.join(directory, `fixed-${index}`))
+    const config = copyFatFile(
+      imagePath,
+      'extlinux/extlinux.conf',
+      path.join(directory, 'extlinux.conf'),
+    );
+    const parsed = parseExtlinuxConfig(config.contents);
+    const configured = parsed.paths.map((fatPath, index) => (
+      copyFatFile(imagePath, fatPath, path.join(directory, `configured-${index}`))
     ));
-    const bootPaths = parseBootPaths(fixed[2].contents);
-    const configured = bootPaths.map((name, index) => (
-      copyFatFile(imagePath, name, path.join(directory, `configured-${index}`))
-    ));
-    return [...fixed, ...configured].map(({ contents, ...record }) => record);
+    const files = [config, ...configured];
+    validateBootPayloads(files);
+    return {
+      files: files.map(({ contents, ...record }) => record),
+      rootUuid: parsed.rootUuid,
+    };
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
 }
 
-export function validateEmmcBootChain(mbrPath, environmentPath, fatPath, rootfsPath) {
+export function inspectFatBootFiles(imagePath) {
+  return inspectFatBootContents(imagePath).files;
+}
+
+export function inspectBurnPackagePartitions(packageDirectory) {
+  const entries = fs.readdirSync(packageDirectory, { withFileTypes: true });
+  const actual = entries.filter((entry) => entry.name.endsWith('.PARTITION'))
+    .map((entry) => entry.name);
+  for (const name of actual) {
+    if (!BURN_PARTITIONS.includes(name)) fail(`unexpected partition payload: ${name}`);
+  }
+  for (const name of BURN_PARTITIONS) {
+    const entry = entries.find((candidate) => candidate.name === name);
+    if (!entry?.isFile() || fs.statSync(path.join(packageDirectory, name)).size === 0) {
+      fail(`missing partition payload: ${name}`);
+    }
+  }
+  return { partitions: [...BURN_PARTITIONS] };
+}
+
+export function validateEmmcBootChain(mbrPath, fatPath, rootfsPath) {
   const mbr = inspectDosMbr(mbrPath);
-  const environment = inspectUbootEnvironment(environmentPath);
   const fat = inspectFatBootImage(fatPath);
   const rootfs = inspectSparseImage(rootfsPath);
+  const fatContents = inspectFatBootContents(fatPath);
+  const rootUuid = readSparseExt4Uuid(rootfsPath);
   const [fatPartition, rootPartition] = mbr.partitions;
   if (fatPartition.startLba !== (BOOT_START_MIB * MIB) / SECTOR_BYTES) {
     fail('DOS MBR FAT partition start is invalid');
@@ -221,25 +240,24 @@ export function validateEmmcBootChain(mbrPath, environmentPath, fatPath, rootfsP
     fail('DOS MBR root partition start is invalid');
   }
   if (fatPartition.sectors * SECTOR_BYTES !== fat.size) {
-    fail('DOS MBR FAT partition length differs from system.PARTITION');
+    fail('DOS MBR FAT partition length differs from boot.PARTITION');
   }
   if (rootPartition.sectors * SECTOR_BYTES !== rootfs.logicalBytes) {
     fail('DOS MBR root partition length differs from data.PARTITION');
   }
-  if (environment.variables.bootcmd !== 'run start_emmc_autoscript; run storeboot'
-      || environment.variables.start_emmc_autoscript !== EMMC_AUTOSCRIPT
-      || environment.variables.upgrade_step !== '2') {
-    fail('env.PARTITION does not select the eMMC Armbian boot chain');
+  if (fatContents.rootUuid !== rootUuid) {
+    fail('extlinux root filesystem UUID differs from data.PARTITION');
   }
   return {
     schemaVersion: 1,
-    strategy: 'stock-fip-env-emmc-fat',
-    environment: { size: environment.size, variableCount: environment.variableCount,
-      bootcmd: environment.variables.bootcmd,
-      startEmmcAutoscript: environment.variables.start_emmc_autoscript },
-    fat: { ...fat, files: inspectFatBootFiles(fatPath),
-      startLba: fatPartition.startLba, startMiB: BOOT_START_MIB },
+    strategy: 'vendor-fip-mainline-bl33-extlinux',
+    fat: {
+      ...fat,
+      files: fatContents.files,
+      startLba: fatPartition.startLba,
+      startMiB: BOOT_START_MIB,
+    },
     rootfs: { ...rootfs, startLba: rootPartition.startLba, startMiB: ROOT_START_MIB },
-    rootUuid: readSparseExt4Uuid(rootfsPath),
+    rootUuid,
   };
 }

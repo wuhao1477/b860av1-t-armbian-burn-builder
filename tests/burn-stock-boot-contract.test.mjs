@@ -6,6 +6,7 @@ import test from 'node:test';
 import { gzipSync } from 'node:zlib';
 
 import * as burnImage from '../scripts/burn-image.mjs';
+import { validateDirectBootContract } from '../src/direct-boot-contract.mjs';
 
 const ROOT_UUID = '50031852-ee90-4285-ada7-ab9dc14670c9';
 
@@ -20,6 +21,8 @@ function kernelConfig(overrides = {}) {
     CONFIG_BLK_CMDLINE_PARSER: 'y',
     CONFIG_BLK_DEV_INITRD: 'y',
     CONFIG_CMDLINE_PARTITION: 'y',
+    CONFIG_DEVTMPFS: 'y',
+    CONFIG_DEVTMPFS_MOUNT: 'y',
     CONFIG_DRM_DW_HDMI: 'y',
     CONFIG_DRM_MESON: 'y',
     CONFIG_DRM_MESON_DW_HDMI: 'y',
@@ -59,7 +62,7 @@ function plainDtb() {
   return dtb;
 }
 
-function makeBootFixture(context, config = kernelConfig(), initrd = gzipSync(Buffer.from('070701initrd'))) {
+function makeBootFixture(context, config = kernelConfig(), initrd = Buffer.alloc(0)) {
   const directory = fixture(context);
   const kernel = path.join(directory, 'Image.gz');
   const ramdisk = path.join(directory, 'initrd.img');
@@ -72,17 +75,19 @@ function makeBootFixture(context, config = kernelConfig(), initrd = gzipSync(Buf
   return boot;
 }
 
-test('stock boot validation proves the kernel and initrd direct-boot contract', (context) => {
+test('stock boot validation proves the kernel direct-root contract', (context) => {
   const boot = makeBootFixture(context);
 
   const result = burnImage.validateStockBoot(boot, ROOT_UUID);
 
-  assert.equal(result.initrdCodec, 'gzip');
-  assert.equal(result.initrdKernelConfig, 'CONFIG_RD_GZIP');
+  assert.equal(result.initrdCodec, 'none');
+  assert.equal(result.initrdKernelConfig, null);
   assert.deepEqual(result.requiredKernelConfig, {
     CONFIG_BLK_CMDLINE_PARSER: 'y',
     CONFIG_BLK_DEV_INITRD: 'y',
     CONFIG_CMDLINE_PARTITION: 'y',
+    CONFIG_DEVTMPFS: 'y',
+    CONFIG_DEVTMPFS_MOUNT: 'y',
     CONFIG_DRM_DW_HDMI: 'y',
     CONFIG_DRM_MESON: 'y',
     CONFIG_DRM_MESON_DW_HDMI: 'y',
@@ -93,10 +98,45 @@ test('stock boot validation proves the kernel and initrd direct-boot contract', 
     CONFIG_MMC_BLOCK: 'y',
     CONFIG_MMC_MESON_GX: 'y',
     CONFIG_PHY_MESON_GXL_USB2: 'y',
-    CONFIG_RD_GZIP: 'y',
     CONFIG_STMMAC_ETH: 'y',
   });
   assert.match(result.kernelConfigSha256, /^[0-9a-f]{64}$/);
+});
+
+test('stock boot validation accepts direct root boot without an initramfs', (context) => {
+  const boot = makeBootFixture(context, kernelConfig(), Buffer.alloc(0));
+
+  const result = burnImage.validateStockBoot(boot, ROOT_UUID);
+
+  assert.equal(result.ramdiskSize, 0);
+  assert.equal(result.initrdCodec, 'none');
+  assert.equal(result.initrdKernelConfig, null);
+});
+
+test('direct root boot requires the kernel to mount devtmpfs', (context) => {
+  const boot = makeBootFixture(
+    context,
+    kernelConfig({ CONFIG_DEVTMPFS_MOUNT: 'n' }),
+    Buffer.alloc(0),
+  );
+
+  assert.throws(
+    () => burnImage.validateStockBoot(boot, ROOT_UUID),
+    /CONFIG_DEVTMPFS_MOUNT=y/,
+  );
+});
+
+test('stock direct-root boot rejects an initramfs payload', (context) => {
+  const boot = makeBootFixture(
+    context,
+    kernelConfig(),
+    gzipSync(Buffer.from('070701initrd')),
+  );
+
+  assert.throws(
+    () => burnImage.validateStockBoot(boot, ROOT_UUID),
+    /must not contain an initramfs/,
+  );
 });
 
 test('stock boot validation rejects disabled direct-boot kernel features', (context) => {
@@ -112,10 +152,11 @@ test('stock boot validation rejects disabled direct-boot kernel features', (cont
 });
 
 test('stock boot validation requires the initrd codec in the kernel', (context) => {
-  const missingGzip = makeBootFixture(context, kernelConfig({ CONFIG_RD_GZIP: 'n' }));
+  const kernel = arm64Kernel(kernelConfig({ CONFIG_RD_GZIP: 'n' }));
+  const initrd = gzipSync(Buffer.from('070701initrd'));
 
   assert.throws(
-    () => burnImage.validateStockBoot(missingGzip, ROOT_UUID),
+    () => validateDirectBootContract(kernel, initrd),
     /CONFIG_RD_GZIP=y/,
   );
 });

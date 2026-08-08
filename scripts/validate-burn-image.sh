@@ -6,88 +6,127 @@ image=$1
 report=$2
 raw=$3
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+[[ -f "$image" && -f "$report" && -f "$raw" ]] || {
+  echo 'burn validation input is missing' >&2
+  exit 1
+}
 tmp=$(mktemp -d)
-[[ -f "$image" && -f "$report" && -f "$raw" ]] || { echo 'burn validation input is missing' >&2; exit 1; }
 cleanup() { rm -rf "$tmp"; }
 trap cleanup EXIT
 
-ampack="$tmp/ampack-src"
+checkout_exact() {
+  local repository=$1 commit=$2 directory=$3
+  mkdir -p "$directory"
+  git -C "$directory" init --quiet
+  git -C "$directory" remote add origin "$repository"
+  git -C "$directory" fetch --quiet --depth 1 origin "$commit"
+  git -C "$directory" checkout --detach FETCH_HEAD >/dev/null
+  [[ "$(git -C "$directory" rev-parse HEAD)" == "$commit" ]] || {
+    echo "source checkout differs: $repository" >&2
+    exit 1
+  }
+}
+
 mapfile -t ampack_source < <(node -e '
   const value = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).ampack;
-  console.log(value.repository);
-  console.log(value.commit);
+  console.log(value.repository); console.log(value.commit);
 ' "$root/config/burn-tooling.json")
-[[ ${#ampack_source[@]} -eq 2 && "${ampack_source[1]}" =~ ^[0-9a-f]{40}$ ]] || {
-  echo 'ampack source contract is invalid' >&2
-  exit 1
-}
-git clone --filter=blob:none "${ampack_source[0]}" "$ampack" >/dev/null
-git -C "$ampack" checkout --detach "${ampack_source[1]}" >/dev/null
-[[ "$(git -C "$ampack" rev-parse HEAD)" == "${ampack_source[1]}" ]] || {
-  echo 'ampack commit differs from the pinned source' >&2
-  exit 1
-}
-cargo build --release --manifest-path "$ampack/Cargo.toml" >/dev/null
-"$ampack/target/release/ampack" verify "$image" >/dev/null
-"$ampack/target/release/ampack" unpack "$image" "$tmp/unpack" >/dev/null
+ampack_src="$tmp/ampack"
+checkout_exact "${ampack_source[0]}" "${ampack_source[1]}" "$ampack_src"
+cargo build --quiet --release --manifest-path "$ampack_src/Cargo.toml"
+ampack="$ampack_src/target/release/ampack"
+"$ampack" verify "$image" >/dev/null
+"$ampack" unpack "$image" "$tmp/unpack" >/dev/null
 
 for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf \
-  bootloader.PARTITION boot.PARTITION data.PARTITION meson1.dtb; do
+  1.PARTITION bootloader.PARTITION boot.PARTITION data.PARTITION meson1.dtb; do
   [[ -s "$tmp/unpack/$name" ]] || { echo "missing $name" >&2; exit 1; }
 done
-for legacy in 1.PARTITION env.PARTITION system.PARTITION; do
-  [[ ! -e "$tmp/unpack/$legacy" ]] || { echo "unsupported legacy eMMC payload: $legacy" >&2; exit 1; }
+for name in env.PARTITION system.PARTITION vendor.PARTITION recovery.PARTITION \
+  cache.PARTITION logo.PARTITION crypt.PARTITION misc.PARTITION; do
+  [[ ! -e "$tmp/unpack/$name" ]] || {
+    echo "prohibited Android partition payload: $name" >&2
+    exit 1
+  }
 done
-for name in vendor.PARTITION recovery.PARTITION cache.PARTITION; do
-  [[ ! -e "$tmp/unpack/$name" ]] || { echo "prohibited Android partition payload: $name" >&2; exit 1; }
-done
-
-for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf bootloader.PARTITION; do
+node "$root/scripts/burn-image.mjs" check-burn-partitions "$tmp/unpack" >/dev/null
+for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf meson1.dtb; do
   expected=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$root/config/burn-inputs.json')).files['$name'])")
   printf '%s  %s\n' "$expected" "$tmp/unpack/$name" | sha256sum --check --status
 done
-vendor_source="$tmp/vendor-meson1.dtb"
-cp -- "$root/board-inputs/meson1.dtb" "$vendor_source"
-expected=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$root/config/burn-inputs.json')).files['meson1.dtb'])")
-printf '%s  %s\n' "$expected" "$vendor_source" | sha256sum --check --status
 
 root_uuid=$(node "$root/scripts/burn-image.mjs" sparse-ext4-uuid "$tmp/unpack/data.PARTITION")
-node "$root/scripts/burn-image.mjs" check-stock-boot \
-  "$tmp/unpack/boot.PARTITION" "$root_uuid" > "$tmp/boot-contract.json"
-node "$root/scripts/burn-image.mjs" extract-boot-second \
-  "$tmp/unpack/boot.PARTITION" "$tmp/linux.dtb" >/dev/null
+node "$root/scripts/burn-image.mjs" check-emmc-chain \
+  "$tmp/unpack/1.PARTITION" "$tmp/unpack/boot.PARTITION" \
+  "$tmp/unpack/data.PARTITION" > "$tmp/emmc-boot-contract.json"
+[[ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$tmp/emmc-boot-contract.json')).rootUuid)")" == "$root_uuid" ]] || {
+  echo 'eMMC boot contract UUID differs from data.PARTITION' >&2
+  exit 1
+}
+mcopy -i "$tmp/unpack/boot.PARTITION" \
+  ::dtb/amlogic/meson-gxl-s905x-p212-b860av11t.dtb "$tmp/linux.dtb"
 node "$root/scripts/burn-image.mjs" check-standalone-dtb "$tmp/linux.dtb" >/dev/null
-node "$root/scripts/burn-image.mjs" check-dtb-pair \
-  "$tmp/unpack/boot.PARTITION" "$tmp/linux.dtb" >/dev/null
-node "$root/scripts/burn-image.mjs" replace-linux-target-dtb \
-  "$vendor_source" "$tmp/linux.dtb" "$tmp/expected-meson1.dtb" >/dev/null
-cmp -- "$tmp/expected-meson1.dtb" "$tmp/unpack/meson1.dtb"
-node "$root/scripts/burn-image.mjs" check-burn-dtb-roles \
-  "$tmp/unpack/meson1.dtb" "$tmp/linux.dtb" > "$tmp/dtb-contract.json"
-
-mapfile -t capacity < <(node -e '
-  const fs = require("fs");
-  const board = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  const dtb = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-  console.log(board.storageCapacityBytes);
-  console.log(dtb.layoutMiB.data);
-  console.log(board.storageSafetyMarginBytes);
-' "$root/config/board.json" "$tmp/dtb-contract.json")
-[[ ${#capacity[@]} -eq 3 ]] || { echo 'burn capacity inputs are incomplete' >&2; exit 1; }
-node "$root/scripts/burn-image.mjs" check-sparse-capacity \
-  "$tmp/unpack/data.PARTITION" "${capacity[0]}" "${capacity[1]}" "${capacity[2]}" \
-  > "$tmp/rootfs-contract.json"
 file "$tmp/unpack/data.PARTITION" | grep -q 'Android sparse' || {
-  echo 'data.PARTITION is not sparse' >&2
+  echo 'data.PARTITION is not Android sparse ext4' >&2
   exit 1
 }
 
+stock_fip_sha=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).stockFip.sha256)' \
+  "$root/config/mainline-boot.json")
+[[ "$(sha256sum "$tmp/unpack/bootloader.PARTITION" | awk '{print $1}')" != "$stock_fip_sha" ]] || {
+  echo 'bootloader.PARTITION still contains the Android vendor BL33' >&2
+  exit 1
+}
+mapfile -t gxlimg_source < <(node -e '
+  const value = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).gxlimg;
+  console.log(value.repository); console.log(value.commit);
+' "$root/config/mainline-boot.json")
+gxlimg_src="$tmp/gxlimg"
+checkout_exact "${gxlimg_source[0]}" "${gxlimg_source[1]}" "$gxlimg_src"
+jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
+make -C "$gxlimg_src" -j"$jobs" >/dev/null
+mkdir "$tmp/components"
+"$gxlimg_src/gxlimg" -e "$tmp/unpack/bootloader.PARTITION" "$tmp/components"
+"$gxlimg_src/gxlimg" -t bl3x -d "$tmp/components/bl33.enc" "$tmp/u-boot.raw.bin"
+node "$root/scripts/mainline-boot.mjs" fip-evidence \
+  "$tmp/unpack/bootloader.PARTITION" "$tmp/components" "$tmp/u-boot.raw.bin" \
+  > "$tmp/mainline-fip-contract.json"
+node "$root/scripts/mainline-boot.mjs" check-evidence \
+  "$tmp/mainline-fip-contract.json" >/dev/null
+node -e '
+  const fs = require("fs");
+  const boot = fs.readFileSync(process.argv[1]);
+  if (boot.includes(Buffer.from("ANDROID!"))) throw new Error("boot.PARTITION contains ANDROID!");
+  const text = fs.readFileSync(process.argv[2], "latin1");
+  for (const marker of ["storeboot", "imgread", "boot_android"]) {
+    if (text.includes(marker)) throw new Error(`decrypted BL33 contains ${marker}`);
+  }
+' "$tmp/unpack/boot.PARTITION" "$tmp/u-boot.raw.bin"
+
+mapfile -t capacity < <(node -e '
+  const board = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
+  const boot = JSON.parse(require("fs").readFileSync(process.argv[2], "utf8"));
+  console.log(board.storageCapacityBytes);
+  console.log(boot.root.startMiB);
+  console.log(board.storageSafetyMarginBytes);
+' "$root/config/board.json" "$root/config/mainline-boot.json")
+node "$root/scripts/burn-image.mjs" check-sparse-capacity \
+  "$tmp/unpack/data.PARTITION" "${capacity[0]}" "${capacity[1]}" "${capacity[2]}" \
+  > "$tmp/rootfs-contract.json"
+
 report_dir=$(cd -- "$(dirname -- "$report")" && pwd)
-for name in boot-contract.json dtb-contract.json rootfs-contract.json; do
-  cmp --silent "$report_dir/$name" "$tmp/$name" || { echo "published $name differs from unpacked image" >&2; exit 1; }
+for name in emmc-boot-contract.json mainline-fip-contract.json rootfs-contract.json; do
+  cmp --silent "$report_dir/$name" "$tmp/$name" || {
+    echo "published $name differs from the unpacked burn image" >&2
+    exit 1
+  }
 done
 node "$root/scripts/burn-image.mjs" check-report "$report" "$image" "$raw" \
-  "$tmp/boot-contract.json" "$tmp/dtb-contract.json" "$tmp/rootfs-contract.json" >/dev/null
+  "$tmp/emmc-boot-contract.json" "$tmp/mainline-fip-contract.json" \
+  "$tmp/rootfs-contract.json" >/dev/null
 magic=$(od -An -tx4 -j8 -N4 "$image" | tr -d ' ')
-[[ "$magic" == 27b51956 ]] || { echo "unexpected Amlogic v2 version magic: $magic" >&2; exit 1; }
+[[ "$magic" == 27b51956 ]] || {
+  echo "unexpected Amlogic v2 version magic: $magic" >&2
+  exit 1
+}
 echo 'format-valid / hardware-unverified'

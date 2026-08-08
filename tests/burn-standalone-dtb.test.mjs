@@ -48,7 +48,7 @@ function generate(input, output) {
   );
 }
 
-test('standalone DTB CLI preserves mainline bindings and adds the stock P211 partition table', (context) => {
+test('standalone DTB CLI emits an unpadded P211 FDT with the stock partition table', (context) => {
   const directory = fixture(context);
   const input = path.join(directory, 'board.dtb');
   const output = path.join(directory, 'meson1.dtb');
@@ -61,16 +61,20 @@ test('standalone DTB CLI preserves mainline bindings and adds the stock P211 par
   assert.equal(result.status, 0, result.stderr);
   const image = fs.readFileSync(output);
   const fdtSize = image.readUInt32BE(4);
-  assert.equal(image.length, 256000);
   assert.equal(image.readUInt32BE(0), 0xd00dfeed);
-  assert.ok(fdtSize > 8 && fdtSize < image.length);
-  assert.ok(image.subarray(fdtSize).every((byte) => byte === 0));
+  assert.ok(fdtSize > 8);
+  assert.equal(image.length, fdtSize);
   assert.equal(fdtget(output, '/', 'compatible'), 'amlogic,p212 amlogic,s905x amlogic,meson-gxl');
   assert.equal(fdtget(output, '/', 'amlogic-dt-id'), 'gxl_p211_1g');
   assert.match(fdtget(output, '/soc/ethernet@c9410000', 'compatible'), /meson-gxbb-dwmac/);
   assert.match(fdtget(output, '/soc/apb@d0000000/mmc@74000', 'compatible'), /meson-gx-mmc/);
   assert.match(fdtget(output, '/soc/hdmi-tx@c883a000', 'compatible'), /meson-gxl-dw-hdmi/);
-  assert.equal(fdtget(output, '/soc/apb@d0000000/mmc@74000', 'max-frequency'), '100000000');
+  assert.equal(fdtget(output, '/soc/apb@d0000000/mmc@74000', 'max-frequency'), '50000000');
+  const symbols = childProcess.spawnSync('fdtget', ['-l', output, '/__symbols__'], {
+    encoding: 'utf8',
+  });
+  assert.notEqual(symbols.status, 0, 'runtime FDT must not retain overlay symbols');
+  assert.ok(image.length <= 36864, 'runtime FDT must fit the stock P211 slot');
 
   const children = childProcess.execFileSync('fdtget', ['-l', output, '/partitions'], {
     encoding: 'utf8',
@@ -94,7 +98,7 @@ test('standalone DTB CLI preserves mainline bindings and adds the stock P211 par
   );
   assert.equal(validation.status, 0, validation.stderr);
   assert.deepEqual(JSON.parse(validation.stdout), {
-    size: 256000,
+    size: fdtSize,
     fdtSize,
     target: 'gxl_p211_1g',
     partitions: partitions.map(([name]) => name),
@@ -137,8 +141,6 @@ test('standalone DTB validation rejects the wrong stock target id', (context) =>
   assert.equal(generated.status, 0, generated.stderr);
 
   childProcess.execFileSync('fdtput', ['-t', 's', output, '/', 'amlogic-dt-id', 'gxl_p212_1g']);
-  fs.truncateSync(output, 256000);
-
   const result = childProcess.spawnSync(
     process.execPath,
     [cli, 'check-standalone-dtb', output],
