@@ -1,20 +1,21 @@
 {
   "schemaVersion": 1,
   "uboot": {
-    "repository": "https://github.com/u-boot/u-boot.git",
-    "tag": "v2026.01",
-    "commit": "127a42c7257a6ffbbd1575ed1cbaa8f5408a44b3",
-    "defconfig": "bestv-r3300-l_defconfig",
-    "patch": {
-      "path": "patches/u-boot/v2026.01/add-board-bestv-r3300-l.patch",
-      "sha256": "1f86ecade99bb4128b9e727a5b7a729827d0183784e52099c6ad7deab02a0bef",
-      "armbianBuildCommit": "1fdeb047ef77d00f8ccb30da84fe9fd54664ec54",
-      "sourceUrl": "https://raw.githubusercontent.com/armbian/build/1fdeb047ef77d00f8ccb30da84fe9fd54664ec54/patch/u-boot/v2026.01/board_bestv-r3300-l/add-board-bestv-r3300-l.patch"
-    },
-    "emmcPatch": {
-      "path": "patches/u-boot/v2026.01/b860-emmc-50mhz.patch",
-      "sha256": "f2cd099bbf86f742802c325ad360cd4de6a8b1fb7cadf4dfa1c448572d895681",
-      "maxFrequency": 50000000
+    "repository": "https://github.com/7Ji/u-boot.git",
+    "tag": "v2023.01-r3300l",
+    "commit": "1463c7dc282a22cf7d1c62bd1ef00e2fd9cb33d6",
+    "defconfig": "r3300l_defconfig",
+    "referenceRelease": {
+      "tag": "v2023.01-r3300l",
+      "rawBl33Name": "u-boot-r3300l.bin",
+      "rawBl33Size": 633376,
+      "rawBl33Sha256": "27874155c05d4c8252cf443a78c84867d071960dff0d66dbee5c8f19a3d30737",
+      "emmcImageName": "r3300l-u-boot.bin.sd.bin",
+      "emmcImageSize": 866304,
+      "emmcImageSha256": "426cf3024a75b70e1a0d38334ddb1573f2b4204141f228e5fc1a70b020bc69aa",
+      "emmcFipOffsetBytes": 512,
+      "emmcFipSize": 865792,
+      "emmcFipSha256": "ed4cbfa56c60716a1a3520a53804f7b61ffddae8e3a04e720a8d6a51940d98d4"
     }
   },
   "gxlimg": {

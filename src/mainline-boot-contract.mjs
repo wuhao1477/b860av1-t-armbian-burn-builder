@@ -168,8 +168,8 @@ function validateVendorComponents(components) {
 function validateUboot(uboot) {
   requireSha256(uboot?.rawSha256, 'raw BL33');
   if (typeof uboot?.version !== 'string'
-      || !uboot.version.startsWith('U-Boot 2026.01')
-      || !uboot.version.includes('r3300-l')) {
+      || !uboot.version.startsWith('U-Boot 2023.01')
+      || !uboot.version.includes('r3300l')) {
     fail('mainline U-Boot version is invalid');
   }
   let boot;

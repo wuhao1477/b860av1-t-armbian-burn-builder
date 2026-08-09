@@ -23,11 +23,11 @@ function fileEvidence(file) {
 }
 
 function ubootVersion(image) {
-  const start = image.indexOf(Buffer.from('U-Boot 2026.01'));
-  if (start < 0) fail('raw BL33 has no U-Boot 2026.01 version');
+  const start = image.indexOf(Buffer.from('U-Boot 2023.01'));
+  if (start < 0) fail('raw BL33 has no U-Boot 2023.01 version');
   const end = image.indexOf(0, start);
   const version = image.subarray(start, end < 0 ? start + 160 : end).toString('ascii');
-  if (!version.includes('r3300-l')) fail('raw BL33 is not the R3300-L U-Boot build');
+  if (!version.includes('r3300l')) fail('raw BL33 is not the R3300L U-Boot build');
   return version;
 }
 

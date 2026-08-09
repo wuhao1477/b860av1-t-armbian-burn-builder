@@ -30,7 +30,7 @@ function validEvidence() {
       },
     },
     uboot: {
-      version: 'U-Boot 2026.01 r3300-l',
+      version: 'U-Boot 2023.01 r3300l',
       defaultBootCommand: mainline.createMainlineBootCommand(ROOT_UUID, FIT_BYTES),
       bootTargets: ['usb0', 'mmc0', 'mmc1', 'pxe', 'dhcp'],
       fitLoadAddress: '0x08000000',

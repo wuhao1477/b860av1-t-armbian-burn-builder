@@ -58,7 +58,9 @@ gh workflow run verify-device.yml \
 
 Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必须携带与具体主板 DDR、电源和安全配置匹配的 BL2/BL30/BL301、USB U-Boot 与持久 bootloader。
 
-当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf` 和原厂 `meson1.dtb`。持久 `bootloader.PARTITION` 保留原厂签名的 BL2/BL30/BL301/BL31，只把 Android BL33 替换为固定提交构建的 U-Boot v2026.01 R3300-L BL33；U-Boot 与 Linux DTB 的 eMMC 时钟都限制为 50 MHz。
+当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf` 和原厂 `meson1.dtb`。持久 `bootloader.PARTITION` 保留原厂签名的 BL2/BL30/BL301/BL31，只把 Android BL33 替换为从 [7Ji/u-boot](https://github.com/7Ji/u-boot/tree/v2023.01-r3300l) 固定提交构建的 U-Boot 2023.01 R3300L BL33。构建会下载并校验 7Ji 的参考 Release，确认其 eMMC FIP 的 BL2/BL30/BL301/BL31 与本仓库 B860 原厂阶段逐字节相同。
+
+R3300L 参考 U-Boot 默认不初始化视频，直刷 BL33 也明确关闭 `CONFIG_VIDEO`，避免较新的 U-Boot 视频初始化与 2017 年原厂前级固件组合后在进入 Linux 前失效。因此不会显示 U-Boot 画面；HDMI 由 Linux 内核和 FIT 中的 B860 DTB 接管。该选择只证明启动链来源更接近公开实机参考，固件状态仍是 `hardware-unverified`。
 
 最终包只写入三个命名分区载荷：主线 BL33 FIP `bootloader.PARTITION`、不超过 32 MiB 的 raw FIT `boot.PARTITION` 和 sparse ext4 `data.PARTITION`。FIT 内含 `Image.gz`、raw `initrd.img` 和 B860 P212 DTB，不包含 Android boot v0、原厂环境或 autoscript。
 

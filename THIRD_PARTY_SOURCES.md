@@ -20,6 +20,21 @@ complete patched source tree used by the independent validation build, plus
 `uboot-build.json` with the archive, source-tree, configuration, and output
 digests. U-Boot remains under GPL-2.0-or-later.
 
+The direct-burn BL33 is a separate source build pinned to 7Ji's
+`v2023.01-r3300l` tag and commit `1463c7dc282a22cf7d1c62bd1ef00e2fd9cb33d6`
+at <https://github.com/7Ji/u-boot>. The build uses `r3300l_defconfig`, replaces
+the default environment with a fixed raw-FIT eMMC boot command, and disables
+U-Boot video initialization. No prebuilt third-party BL33 is placed in the
+published burn image.
+
+As compatibility evidence, the build downloads both assets from
+<https://github.com/7Ji/u-boot/releases/tag/v2023.01-r3300l>, verifies their
+pinned sizes and SHA-256 digests, extracts the FIP from the eMMC image, and
+requires its BL2, BL30, BL301, and BL31 to match the B860 stock stages byte for
+byte. The reference binaries are validation inputs only. This evidence does
+not replace a successful boot test on the target hardware, so the direct-burn
+release remains `format-valid / hardware-unverified`.
+
 ## Repair device tree
 
 The B860AV1.1-T repair DTB is compiled from the MIT-licensed

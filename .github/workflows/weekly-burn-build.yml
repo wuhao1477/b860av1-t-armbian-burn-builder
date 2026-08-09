@@ -54,8 +54,6 @@ jobs:
             board-inputs/meson1.dtb \
             config/board.json config/burn-inputs.json config/burn-tooling.json \
             config/mainline-boot.json board-overlays/burn-partitions.dtso \
-            patches/u-boot/v2026.01/add-board-bestv-r3300-l.patch \
-            patches/u-boot/v2026.01/b860-emmc-50mhz.patch \
             scripts/build-burn-image.sh scripts/build-mainline-uboot.sh scripts/burn-image.mjs \
             scripts/mainline-boot.mjs \
             scripts/validate-burn-image.sh src/android-sparse.mjs src/burn-report.mjs \
