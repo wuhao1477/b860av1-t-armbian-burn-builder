@@ -167,26 +167,28 @@ test('validator includes userspace, kernel, DTB, service and media-size checks',
   }
 });
 
-test('burn builder creates a mainline BL33 extlinux eMMC package', () => {
+test('burn builder creates a mainline BL33 raw FIT eMMC package', () => {
   const builder = read('scripts/build-burn-image.sh');
   const validator = read('scripts/validate-burn-image.sh');
   assert.match(builder, /blkid --match-tag UUID --output value \"\$root_part\"/);
   assert.match(validator, /sparse-ext4-uuid/);
   for (const payload of [
-    '1.PARTITION', 'boot.PARTITION', 'data.PARTITION', 'bootloader.PARTITION', 'meson1.dtb',
+    'boot.PARTITION', 'data.PARTITION', 'bootloader.PARTITION', 'meson1.dtb',
   ]) {
     const pattern = new RegExp(payload.replace('.', '\\.'));
     assert.match(builder, pattern);
     assert.match(validator, pattern);
   }
+  assert.doesNotMatch(builder, /1\.PARTITION/);
+  assert.doesNotMatch(validator, /1\.PARTITION/);
   assert.doesNotMatch(builder, /env\.PARTITION|system\.PARTITION/);
   assert.match(validator, /env\.PARTITION|system\.PARTITION/);
   assert.doesNotMatch(validator, /check-stock-boot|replace-linux-target-dtb/);
-  assert.match(builder, /mformat/);
+  assert.match(builder, /mkimage/);
   assert.match(builder, /boot-components\.json/);
-  assert.match(builder, /extlinux\/extlinux\.conf/);
+  assert.match(builder, /fit-source/);
   assert.match(builder, /build-mainline-uboot\.sh/);
-  assert.match(builder, /dos-mbr/);
+  assert.doesNotMatch(builder, /dos-mbr/);
   assert.match(builder, /check-emmc-chain/);
   assert.match(validator, /check-emmc-chain/);
   assert.match(builder, /check-burn-partitions/);

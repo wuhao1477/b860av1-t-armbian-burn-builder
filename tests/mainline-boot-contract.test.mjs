@@ -1,10 +1,13 @@
 import assert from 'node:assert/strict';
+import childProcess from 'node:child_process';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 import * as mainline from '../src/mainline-boot-contract.mjs';
 
 const ROOT_UUID = '50031852-ee90-4285-ada7-ab9dc14670c9';
-const DTB_PATH = '/dtb/amlogic/meson-gxl-s905x-p212-b860av11t.dtb';
+const FIT_BYTES = 4096;
+const CLI = fileURLToPath(new URL('../scripts/mainline-boot.mjs', import.meta.url));
 
 function component(name, size, sha256 = mainline.STOCK_FIP_COMPONENTS[name]) {
   return { size, sha256 };
@@ -14,7 +17,7 @@ function validEvidence() {
   return {
     schemaVersion: 1,
     status: 'format-valid / hardware-unverified',
-    strategy: 'vendor-fip-mainline-bl33-extlinux',
+    strategy: 'vendor-fip-mainline-bl33-fit',
     fip: {
       size: 865_792,
       sha256: 'a'.repeat(64),
@@ -28,8 +31,12 @@ function validEvidence() {
     },
     uboot: {
       version: 'U-Boot 2026.01 r3300-l',
-      defaultBootCommand: 'run distro_bootcmd',
+      defaultBootCommand: mainline.createMainlineBootCommand(ROOT_UUID, FIT_BYTES),
       bootTargets: ['usb0', 'mmc0', 'mmc1', 'pxe', 'dhcp'],
+      fitLoadAddress: '0x08000000',
+      fitSectors: 8,
+      fitStartLba: 2_260_992,
+      rootUuid: ROOT_UUID,
       kernelCompAddress: '0x0d080000',
       kernelCompSize: '0x02000000',
       rawSha256: 'c'.repeat(64),
@@ -37,26 +44,57 @@ function validEvidence() {
   };
 }
 
-test('extlinux configuration boots compressed Armbian from the MBR FAT partition', () => {
-  assert.equal(typeof mainline.createExtlinuxConfig, 'function');
-  const config = mainline.createExtlinuxConfig(1024, ROOT_UUID, DTB_PATH);
+test('FIT source binds the compressed kernel, initrd and B860 device tree', () => {
+  const source = mainline.createFitSource();
 
-  assert.match(config, /^DEFAULT armbian$/m);
-  assert.match(config, /^\s*LINUX \/Image\.gz$/m);
-  assert.match(config, /^\s*INITRD \/initrd\.img$/m);
-  assert.match(config, /^\s*FDT \/dtb\/amlogic\/meson-gxl-s905x-p212-b860av11t\.dtb$/m);
-  assert.match(config, new RegExp(`root=UUID=${ROOT_UUID}`));
-  assert.match(config, /mem=1024M/);
-  assert.doesNotMatch(config, /storeboot|imgread|ANDROID!|blkdevparts/);
+  assert.match(source, /data = \/incbin\/\("Image\.gz"\)/);
+  assert.match(source, /compression = "gzip"/);
+  assert.match(source, /data = \/incbin\/\("initrd\.img"\)/);
+  assert.match(source, /data = \/incbin\/\("linux\.dtb"\)/);
+  assert.match(source, /kernel = "kernel"/);
+  assert.match(source, /ramdisk = "ramdisk"/);
+  assert.match(source, /fdt = "fdt"/);
 });
 
-test('mainline FIP evidence preserves vendor stages and uses distro boot on eMMC', () => {
+test('fixed U-Boot command reads the raw FIT from the named boot partition offset', () => {
+  const command = mainline.createMainlineBootCommand(ROOT_UUID, FIT_BYTES);
+
+  assert.match(command, new RegExp(`root=UUID=${ROOT_UUID}`));
+  assert.match(command, /blkdevparts=mmcblk2:/);
+  assert.match(command, /mmc dev 1/);
+  assert.match(command, /mmc read 0x08000000 0x00228000 0x00000008/);
+  assert.match(command, /bootm 0x08000000/);
+  assert.doesNotMatch(command, /distro_bootcmd|storeboot|imgread|ANDROID!/);
+  assert.deepEqual(mainline.inspectMainlineBootCommand(command), {
+    fitLoadAddress: '0x08000000',
+    fitSectors: 8,
+    fitStartLba: 2_260_992,
+    rootUuid: ROOT_UUID,
+  });
+});
+
+test('mainline boot CLI emits FIT source and the matching fixed boot command', () => {
+  const fit = childProcess.spawnSync(process.execPath, [CLI, 'fit-source'], { encoding: 'utf8' });
+  const boot = childProcess.spawnSync(
+    process.execPath,
+    [CLI, 'boot-command', ROOT_UUID, String(FIT_BYTES)],
+    { encoding: 'utf8' },
+  );
+
+  assert.equal(fit.status, 0, fit.stderr);
+  assert.match(fit.stdout, /\/incbin\/\("Image\.gz"\)/);
+  assert.equal(boot.status, 0, boot.stderr);
+  assert.equal(mainline.inspectMainlineBootCommand(boot.stdout).fitSectors, 8);
+});
+
+test('mainline FIP evidence preserves vendor stages and fixes FIT boot on eMMC', () => {
   const evidence = mainline.validateMainlineFipEvidence(validEvidence());
 
-  assert.equal(evidence.strategy, 'vendor-fip-mainline-bl33-extlinux');
+  assert.equal(evidence.strategy, 'vendor-fip-mainline-bl33-fit');
   assert.equal(evidence.fip.components.bl2.sha256, mainline.STOCK_FIP_COMPONENTS.bl2);
-  assert.equal(evidence.uboot.defaultBootCommand, 'run distro_bootcmd');
-  assert.equal(evidence.uboot.bootTargets.includes('mmc1'), true);
+  assert.equal(evidence.uboot.fitStartLba, 2_260_992);
+  assert.equal(evidence.uboot.fitSectors, 8);
+  assert.equal(evidence.uboot.rootUuid, ROOT_UUID);
   assert.equal(evidence.uboot.kernelCompAddress, '0x0d080000');
   assert.equal(evidence.uboot.kernelCompSize, '0x02000000');
 });
@@ -71,7 +109,7 @@ test('mainline FIP evidence rejects a changed vendor BL31 stage', () => {
   );
 });
 
-test('mainline FIP evidence rejects Android boot commands and missing eMMC scan', () => {
+test('mainline FIP evidence rejects Android boot commands and FIT contract drift', () => {
   const android = validEvidence();
   android.uboot.defaultBootCommand = 'run storeboot';
   assert.throws(
@@ -79,11 +117,11 @@ test('mainline FIP evidence rejects Android boot commands and missing eMMC scan'
     /default boot command/,
   );
 
-  const noEmmc = validEvidence();
-  noEmmc.uboot.bootTargets = ['usb0', 'mmc0', 'pxe', 'dhcp'];
+  const wrongSectors = validEvidence();
+  wrongSectors.uboot.fitSectors = 7;
   assert.throws(
-    () => mainline.validateMainlineFipEvidence(noEmmc),
-    /mmc1/,
+    () => mainline.validateMainlineFipEvidence(wrongSectors),
+    /FIT sector count/,
   );
 
   const noCompressedKernelSpace = validEvidence();

@@ -4,14 +4,14 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { gzipSync } from 'node:zlib';
+import { fileURLToPath } from 'node:url';
 
 import { makeSparse } from '../scripts/burn-image.mjs';
 import * as chain from '../src/emmc-boot-chain.mjs';
 
 const MIB = 1024 * 1024;
 const ROOT_UUID = '50031852-ee90-4285-ada7-ab9dc14670c9';
-const DTB_PATH = '/dtb/amlogic/meson-gxl-s905x-p212-b860av11t.dtb';
+const CLI = fileURLToPath(new URL('../scripts/burn-image.mjs', import.meta.url));
 
 function fixture(context) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-emmc-chain-'));
@@ -19,44 +19,13 @@ function fixture(context) {
   return directory;
 }
 
-function copyToFat(image, directory, destination, contents) {
-  const source = path.join(directory, destination.replaceAll('/', '_'));
-  fs.writeFileSync(source, contents);
-  childProcess.execFileSync('mcopy', ['-o', '-i', image, source, `::${destination}`]);
-}
-
-function writeFatFixture(filePath, directory, rootUuid = ROOT_UUID) {
-  fs.closeSync(fs.openSync(filePath, 'w'));
-  fs.truncateSync(filePath, 32 * MIB);
-  childProcess.execFileSync(
-    'mformat', ['-i', filePath, '-N', '00000000', '-v', 'BOOT', '::'],
-    { stdio: 'ignore' },
-  );
-  childProcess.execFileSync(
-    'mmd', ['-i', filePath, '::extlinux', '::dtb', '::dtb/amlogic'],
-    { stdio: 'ignore' },
-  );
-
-  const kernel = Buffer.alloc(64);
-  kernel.write('ARMd', 56, 'ascii');
-  const dtb = Buffer.alloc(128);
-  dtb.writeUInt32BE(0xd00dfeed, 0);
-  dtb.writeUInt32BE(dtb.length, 4);
-  const config = [
-    'TIMEOUT 30',
-    'DEFAULT armbian',
-    '',
-    'LABEL armbian',
-    '  LINUX /Image.gz',
-    '  INITRD /initrd.img',
-    `  FDT ${DTB_PATH}`,
-    `  APPEND root=UUID=${rootUuid} rw rootwait rootfstype=ext4 mem=1024M console=ttyAML0,115200n8 console=tty0 net.ifnames=0`,
-    '',
-  ].join('\n');
-  copyToFat(filePath, directory, 'Image.gz', gzipSync(kernel));
-  copyToFat(filePath, directory, 'initrd.img', gzipSync(Buffer.from('initramfs')));
-  copyToFat(filePath, directory, 'dtb/amlogic/meson-gxl-s905x-p212-b860av11t.dtb', dtb);
-  copyToFat(filePath, directory, 'extlinux/extlinux.conf', config);
+function writeFit(directory, bytes = 4096, declaredBytes = 3072) {
+  const fit = path.join(directory, 'boot.PARTITION');
+  const image = Buffer.alloc(bytes);
+  image.writeUInt32BE(0xd00dfeed, 0);
+  image.writeUInt32BE(declaredBytes, 4);
+  fs.writeFileSync(fit, image);
+  return fit;
 }
 
 function writeSparseRoot(directory) {
@@ -70,70 +39,77 @@ function writeSparseRoot(directory) {
   return sparse;
 }
 
-test('DOS MBR maps a 32 MiB FAT16 boot filesystem at the vendor boot offset', (context) => {
-  const directory = fixture(context);
-  const output = path.join(directory, '1.PARTITION');
+function bootContract(fitSectors = 8) {
+  return {
+    fitLoadAddress: '0x08000000',
+    fitSectors,
+    fitStartLba: 2_260_992,
+    rootUuid: ROOT_UUID,
+  };
+}
 
-  chain.writeDosMbr(output, 32 * MIB, 8 * MIB);
+test('raw FIT inspection enforces the named boot partition geometry', (context) => {
+  const fit = writeFit(fixture(context));
 
-  assert.deepEqual(chain.inspectDosMbr(output).partitions, [
-    { index: 1, bootable: false, type: 0x0e, startLba: 2_260_992, sectors: 65_536 },
-    { index: 2, bootable: false, type: 0x83, startLba: 4_456_448, sectors: 16_384 },
-  ]);
+  assert.deepEqual(chain.inspectRawFitImage(fit), {
+    declaredBytes: 3072,
+    sectors: 8,
+    size: 4096,
+    startLba: 2_260_992,
+    startMiB: 1104,
+  });
 });
 
-test('FAT boot inspection validates extlinux files in the fixed 32 MiB image', (context) => {
-  const directory = fixture(context);
-  const fat = path.join(directory, 'boot.PARTITION');
-  writeFatFixture(fat, directory);
+test('raw FIT inspection rejects payloads that cannot be written in whole sectors', (context) => {
+  const fit = writeFit(fixture(context), 4097, 3072);
 
-  const geometry = chain.inspectFatBootImage(fat);
-  assert.equal(geometry.size, 32 * MIB);
-  assert.equal(geometry.type, 'FAT16');
-  assert.deepEqual(chain.inspectFatBootFiles(fat).map(({ path: file }) => file), [
-    'extlinux/extlinux.conf',
-    '/Image.gz',
-    '/initrd.img',
-    DTB_PATH,
-  ]);
+  assert.throws(() => chain.inspectRawFitImage(fit), /sector-aligned/);
 });
 
-test('eMMC boot contract binds MBR, extlinux and sparse rootfs by UUID', (context) => {
+test('eMMC boot contract binds FIT sectors and root UUID to fixed U-Boot', (context) => {
   const directory = fixture(context);
-  const mbr = path.join(directory, '1.PARTITION');
-  const fat = path.join(directory, 'boot.PARTITION');
+  const fit = writeFit(directory);
   const rootfs = writeSparseRoot(directory);
-  writeFatFixture(fat, directory);
-  chain.writeDosMbr(mbr, 32 * MIB, 8 * MIB);
 
-  assert.equal(typeof chain.validateEmmcBootChain, 'function');
-  const result = chain.validateEmmcBootChain(mbr, fat, rootfs);
-  assert.equal(result.strategy, 'vendor-fip-mainline-bl33-extlinux');
+  const result = chain.validateEmmcBootChain(fit, rootfs, bootContract());
+  assert.equal(result.strategy, 'vendor-fip-mainline-bl33-fit');
   assert.equal(result.rootUuid, ROOT_UUID);
-  assert.equal(result.fat.startMiB, 1104);
+  assert.equal(result.fit.sectors, 8);
+  assert.equal(result.fit.startMiB, 1104);
   assert.equal(result.rootfs.startMiB, 2176);
 });
 
-test('eMMC boot contract rejects an extlinux root UUID not present in data.PARTITION', (context) => {
+test('eMMC boot contract rejects a fixed U-Boot FIT sector mismatch', (context) => {
   const directory = fixture(context);
-  const mbr = path.join(directory, '1.PARTITION');
-  const fat = path.join(directory, 'boot.PARTITION');
+  const fit = writeFit(directory);
   const rootfs = writeSparseRoot(directory);
-  writeFatFixture(fat, directory, '11111111-2222-3333-4444-555555555555');
-  chain.writeDosMbr(mbr, 32 * MIB, 8 * MIB);
 
   assert.throws(
-    () => chain.validateEmmcBootChain(mbr, fat, rootfs),
-    /extlinux root filesystem UUID differs/,
+    () => chain.validateEmmcBootChain(fit, rootfs, bootContract(7)),
+    /FIT sector count differs/,
   );
 });
 
-test('factory package contains only MBR, FIP, FAT boot and sparse root payloads', (context) => {
+test('burn image CLI validates FIT, sparse rootfs and U-Boot evidence together', (context) => {
+  const directory = fixture(context);
+  const fit = writeFit(directory);
+  const rootfs = writeSparseRoot(directory);
+  const evidence = path.join(directory, 'mainline-fip-contract.json');
+  fs.writeFileSync(evidence, JSON.stringify({ uboot: bootContract() }));
+
+  const result = childProcess.spawnSync(process.execPath, [
+    CLI, 'check-emmc-chain', fit, rootfs, evidence,
+  ], { encoding: 'utf8' });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(result.stdout).fit.sectors, 8);
+});
+
+test('factory package contains only named FIP, FIT and sparse root payloads', (context) => {
   const directory = fixture(context);
   const packageDirectory = path.join(directory, 'package');
   fs.mkdirSync(packageDirectory);
   for (const name of [
-    '1.PARTITION',
     'bootloader.PARTITION',
     'boot.PARTITION',
     'data.PARTITION',
@@ -141,16 +117,15 @@ test('factory package contains only MBR, FIP, FAT boot and sparse root payloads'
 
   assert.deepEqual(chain.inspectBurnPackagePartitions(packageDirectory), {
     partitions: [
-      '1.PARTITION',
       'bootloader.PARTITION',
       'boot.PARTITION',
       'data.PARTITION',
     ],
   });
 
-  fs.writeFileSync(path.join(packageDirectory, 'env.PARTITION'), 'vendor environment');
+  fs.writeFileSync(path.join(packageDirectory, '1.PARTITION'), 'invalid target');
   assert.throws(
     () => chain.inspectBurnPackagePartitions(packageDirectory),
-    /unexpected partition payload: env\.PARTITION/,
+    /unexpected partition payload: 1\.PARTITION/,
   );
 });

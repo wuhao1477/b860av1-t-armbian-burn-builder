@@ -39,7 +39,7 @@ ampack="$ampack_src/target/release/ampack"
 "$ampack" unpack "$image" "$tmp/unpack" >/dev/null
 
 for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf \
-  1.PARTITION bootloader.PARTITION boot.PARTITION data.PARTITION meson1.dtb; do
+  bootloader.PARTITION boot.PARTITION data.PARTITION meson1.dtb; do
   [[ -s "$tmp/unpack/$name" ]] || { echo "missing $name" >&2; exit 1; }
 done
 for name in env.PARTITION system.PARTITION vendor.PARTITION recovery.PARTITION \
@@ -55,16 +55,13 @@ for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf 
   printf '%s  %s\n' "$expected" "$tmp/unpack/$name" | sha256sum --check --status
 done
 
-root_uuid=$(node "$root/scripts/burn-image.mjs" sparse-ext4-uuid "$tmp/unpack/data.PARTITION")
-node "$root/scripts/burn-image.mjs" check-emmc-chain \
-  "$tmp/unpack/1.PARTITION" "$tmp/unpack/boot.PARTITION" \
-  "$tmp/unpack/data.PARTITION" > "$tmp/emmc-boot-contract.json"
-[[ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$tmp/emmc-boot-contract.json')).rootUuid)")" == "$root_uuid" ]] || {
-  echo 'eMMC boot contract UUID differs from data.PARTITION' >&2
-  exit 1
-}
-mcopy -i "$tmp/unpack/boot.PARTITION" \
-  ::dtb/amlogic/meson-gxl-s905x-p212-b860av11t.dtb "$tmp/linux.dtb"
+node "$root/scripts/burn-image.mjs" check-raw-fit "$tmp/unpack/boot.PARTITION" >/dev/null
+dumpimage -l "$tmp/unpack/boot.PARTITION" > "$tmp/fit-image.log"
+dumpimage -T flat_dt -p 0 -o "$tmp/Image.gz" "$tmp/unpack/boot.PARTITION" >/dev/null
+dumpimage -T flat_dt -p 1 -o "$tmp/initrd.img" "$tmp/unpack/boot.PARTITION" >/dev/null
+dumpimage -T flat_dt -p 2 -o "$tmp/linux.dtb" "$tmp/unpack/boot.PARTITION" >/dev/null
+gzip -t "$tmp/Image.gz"
+[[ -s "$tmp/initrd.img" ]] || { echo 'raw FIT contains an empty initrd' >&2; exit 1; }
 node "$root/scripts/burn-image.mjs" check-standalone-dtb "$tmp/linux.dtb" >/dev/null
 file "$tmp/unpack/data.PARTITION" | grep -q 'Android sparse' || {
   echo 'data.PARTITION is not Android sparse ext4' >&2
@@ -93,6 +90,14 @@ node "$root/scripts/mainline-boot.mjs" fip-evidence \
   > "$tmp/mainline-fip-contract.json"
 node "$root/scripts/mainline-boot.mjs" check-evidence \
   "$tmp/mainline-fip-contract.json" >/dev/null
+root_uuid=$(node "$root/scripts/burn-image.mjs" sparse-ext4-uuid "$tmp/unpack/data.PARTITION")
+node "$root/scripts/burn-image.mjs" check-emmc-chain \
+  "$tmp/unpack/boot.PARTITION" "$tmp/unpack/data.PARTITION" \
+  "$tmp/mainline-fip-contract.json" > "$tmp/emmc-boot-contract.json"
+[[ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$tmp/emmc-boot-contract.json')).rootUuid)")" == "$root_uuid" ]] || {
+  echo 'eMMC boot contract UUID differs from data.PARTITION' >&2
+  exit 1
+}
 node -e '
   const fs = require("fs");
   const boot = fs.readFileSync(process.argv[1]);

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-usage() { echo "usage: $0 output-dir" >&2; exit 2; }
-[[ $# -eq 1 ]] || usage
+usage() { echo "usage: $0 output-dir root-uuid fit-bytes" >&2; exit 2; }
+[[ $# -eq 3 ]] || usage
 out=$1
+root_uuid=$2
+fit_bytes=$3
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 recipe="$root/config/mainline-boot.json"
 cross=${CROSS_COMPILE:-aarch64-linux-gnu-}
@@ -64,11 +66,13 @@ git -C "$uboot_src" apply "$patch_path"
 git -C "$uboot_src" apply --check "$emmc_patch_path"
 git -C "$uboot_src" apply "$emmc_patch_path"
 make -C "$uboot_src" O="$uboot_build" CROSS_COMPILE="$cross" "$defconfig"
+boot_command=$(node "$root/scripts/mainline-boot.mjs" boot-command "$root_uuid" "$fit_bytes")
 "$uboot_src/scripts/config" --file "$uboot_build/.config" \
   --enable ENV_IS_NOWHERE \
   --enable VIDEO \
   --enable VIDEO_MESON \
   --enable VIDEO_DT_SIMPLEFB \
+  --set-str BOOTCOMMAND "$boot_command" \
   --set-val BOOTDELAY 0
 make -C "$uboot_src" O="$uboot_build" CROSS_COMPILE="$cross" olddefconfig
 

@@ -9,7 +9,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 metadata="$(dirname -- "$raw")/boot-components.json"
 [[ -f "$raw" && -f "$metadata" ]] || { echo 'raw image or boot-components.json not found' >&2; exit 1; }
 
-for command in blkid cargo fdtget git gzip jq losetup mcopy mformat mmd node sha256sum; do
+for command in blkid cargo dumpimage fdtget git gzip jq losetup mkimage node sha256sum; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
@@ -83,23 +83,30 @@ cp -- "$initrd" "$tmp/initrd.img"
 node "$root/scripts/burn-image.mjs" standalone-dtb \
   "$dtb" "$root/board-overlays/burn-partitions.dtso" "$tmp/linux.dtb" >/dev/null
 node "$root/scripts/burn-image.mjs" check-standalone-dtb "$tmp/linux.dtb" >/dev/null
-dtb_path="/dtb/amlogic/$board_dtb"
-node "$root/scripts/mainline-boot.mjs" extlinux 1024 "$root_uuid" "$dtb_path" \
-  > "$tmp/extlinux.conf"
 
 package="$tmp/package"
 mkdir -p "$package"
-fat_bytes=$((32 * 1024 * 1024))
-truncate --size="$fat_bytes" "$package/boot.PARTITION"
-mformat -i "$package/boot.PARTITION" -N 00000000 -v BOOT ::
-mmd -i "$package/boot.PARTITION" ::extlinux ::dtb ::dtb/amlogic
-touch -d '1980-01-01 00:00:00 UTC' \
-  "$tmp/Image.gz" "$tmp/initrd.img" "$tmp/linux.dtb" "$tmp/extlinux.conf"
-mcopy -o -i "$package/boot.PARTITION" "$tmp/Image.gz" ::Image.gz
-mcopy -o -i "$package/boot.PARTITION" "$tmp/initrd.img" ::initrd.img
-mcopy -o -i "$package/boot.PARTITION" "$tmp/linux.dtb" "::dtb/amlogic/$board_dtb"
-mcopy -o -i "$package/boot.PARTITION" "$tmp/extlinux.conf" ::extlinux/extlinux.conf
-node "$root/scripts/burn-image.mjs" check-fat-boot "$package/boot.PARTITION" >/dev/null
+fit_dir="$tmp/fit"
+mkdir -p "$fit_dir"
+cp -- "$tmp/Image.gz" "$fit_dir/Image.gz"
+cp -- "$tmp/initrd.img" "$fit_dir/initrd.img"
+cp -- "$tmp/linux.dtb" "$fit_dir/linux.dtb"
+node "$root/scripts/mainline-boot.mjs" fit-source > "$fit_dir/fit.its"
+pushd "$fit_dir" >/dev/null
+SOURCE_DATE_EPOCH=0 mkimage -f fit.its "$package/boot.PARTITION" >/dev/null
+popd >/dev/null
+fit_bytes=$(stat --format='%s' "$package/boot.PARTITION")
+fit_bytes=$((((fit_bytes + 511) / 512) * 512))
+truncate --size="$fit_bytes" "$package/boot.PARTITION"
+node "$root/scripts/burn-image.mjs" check-raw-fit "$package/boot.PARTITION" >/dev/null
+dumpimage -l "$package/boot.PARTITION" > "$out/fit-image.log"
+for item in 0:Image.gz 1:initrd.img 2:linux.dtb; do
+  index=${item%%:*}
+  name=${item#*:}
+  dumpimage -T flat_dt -p "$index" -o "$tmp/fit-$name" \
+    "$package/boot.PARTITION" >/dev/null
+  cmp -- "$fit_dir/$name" "$tmp/fit-$name"
+done
 
 sudo sync
 sudo umount "$boot_mount"
@@ -117,7 +124,7 @@ node "$root/scripts/burn-image.mjs" sparse \
   exit 1
 }
 
-"$root/scripts/build-mainline-uboot.sh" "$tmp/mainline-uboot"
+"$root/scripts/build-mainline-uboot.sh" "$tmp/mainline-uboot" "$root_uuid" "$fit_bytes"
 cp -- "$tmp/mainline-uboot/bootloader.PARTITION" "$package/bootloader.PARTITION"
 cp -- "$tmp/mainline-uboot/mainline-fip-contract.json" "$out/mainline-fip-contract.json"
 cp -- "$tmp/mainline-uboot/u-boot-build.json" "$out/u-boot-build.json"
@@ -126,11 +133,9 @@ for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf 
   printf '%s  %s\n' "$expected" "$root/board-inputs/$name" | sha256sum --check --status
   cp -- "$root/board-inputs/$name" "$package/$name"
 done
-node "$root/scripts/burn-image.mjs" dos-mbr \
-  "$package/1.PARTITION" "$fat_bytes" "$root_size" >/dev/null
 node "$root/scripts/burn-image.mjs" check-burn-partitions "$package" >/dev/null
 node "$root/scripts/burn-image.mjs" check-emmc-chain \
-  "$package/1.PARTITION" "$package/boot.PARTITION" "$package/data.PARTITION" \
+  "$package/boot.PARTITION" "$package/data.PARTITION" "$out/mainline-fip-contract.json" \
   > "$out/emmc-boot-contract.json"
 
 mapfile -t capacity < <(node -e '

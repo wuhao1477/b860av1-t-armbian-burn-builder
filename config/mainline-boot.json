@@ -36,10 +36,11 @@
     "partition": "boot",
     "startMiB": 1104,
     "sizeMiB": 32,
-    "filesystem": "FAT16",
+    "format": "raw-fit",
+    "fitLoadAddress": "0x08000000",
     "kernel": "Image.gz",
     "initrd": "initrd.img",
-    "dtb": "dtb/amlogic/meson-gxl-s905x-p212-b860av11t.dtb",
+    "dtb": "linux.dtb",
     "memoryLimitMiB": 1024
   },
   "root": {

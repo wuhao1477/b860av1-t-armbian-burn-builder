@@ -4,7 +4,9 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import {
-  createExtlinuxConfig,
+  createFitSource,
+  createMainlineBootCommand,
+  inspectMainlineBootCommand,
   validateMainlineFipEvidence,
 } from '../src/mainline-boot-contract.mjs';
 
@@ -60,9 +62,11 @@ function inspectRawUboot(rawUboot) {
   for (const marker of ['storeboot', 'imgread', 'boot_android', 'ANDROID!']) {
     if (text.includes(marker)) fail(`raw BL33 contains prohibited marker: ${marker}`);
   }
+  const defaultBootCommand = environmentValue(image, 'bootcmd');
   return {
     version: ubootVersion(image),
-    defaultBootCommand: environmentValue(image, 'bootcmd'),
+    defaultBootCommand,
+    ...inspectMainlineBootCommand(defaultBootCommand),
     bootTargets: environmentValue(image, 'boot_targets').split(/\s+/u).filter(Boolean),
     kernelCompAddress: fixedHex(environmentValue(image, 'kernel_comp_addr_r'), 'kernel_comp_addr_r'),
     kernelCompSize: fixedHex(environmentValue(image, 'kernel_comp_size'), 'kernel_comp_size'),
@@ -78,7 +82,7 @@ export function buildMainlineFipEvidence(fip, components, rawUboot) {
   return validateMainlineFipEvidence({
     schemaVersion: 1,
     status: 'format-valid / hardware-unverified',
-    strategy: 'vendor-fip-mainline-bl33-extlinux',
+    strategy: 'vendor-fip-mainline-bl33-fit',
     fip: {
       ...fileEvidence(fip),
       components: {
@@ -98,14 +102,16 @@ function write(value) {
 }
 
 function main([command, ...args]) {
-  if (command === 'extlinux' && args.length === 3) {
-    process.stdout.write(createExtlinuxConfig(Number(args[0]), args[1], args[2]));
+  if (command === 'fit-source' && args.length === 0) {
+    process.stdout.write(createFitSource());
+  } else if (command === 'boot-command' && args.length === 2) {
+    process.stdout.write(`${createMainlineBootCommand(args[0], Number(args[1]))}\n`);
   } else if (command === 'fip-evidence' && args.length === 3) {
     write(buildMainlineFipEvidence(...args));
   } else if (command === 'check-evidence' && args.length === 1) {
     write(validateMainlineFipEvidence(JSON.parse(fs.readFileSync(args[0], 'utf8'))));
   } else {
-    fail('usage: mainline-boot.mjs extlinux memory-mib root-uuid dtb-path | fip-evidence bootloader.PARTITION components-dir raw-uboot | check-evidence evidence.json');
+    fail('usage: mainline-boot.mjs fit-source | boot-command root-uuid fit-bytes | fip-evidence bootloader.PARTITION components-dir raw-uboot | check-evidence evidence.json');
   }
 }
 

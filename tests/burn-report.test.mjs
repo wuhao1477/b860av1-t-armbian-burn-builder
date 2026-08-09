@@ -21,11 +21,11 @@ function fixture(context) {
   fs.writeFileSync(burn, 'burn');
   fs.writeFileSync(source, 'source');
   fs.writeFileSync(emmcBoot, JSON.stringify({
-    strategy: 'vendor-fip-mainline-bl33-extlinux', rootUuid: 'root-uuid',
+    strategy: 'vendor-fip-mainline-bl33-fit', rootUuid: 'root-uuid',
   }));
   fs.writeFileSync(mainlineFip, JSON.stringify({
-    strategy: 'vendor-fip-mainline-bl33-extlinux',
-    uboot: { defaultBootCommand: 'run distro_bootcmd' },
+    strategy: 'vendor-fip-mainline-bl33-fit',
+    uboot: { fitSectors: 8 },
   }));
   fs.writeFileSync(rootfs, JSON.stringify({ logicalBytes: 3145728000, availableBytes: 5584080896 }));
   return { burn, directory, emmcBoot, mainlineFip, rootfs, source };
@@ -44,8 +44,8 @@ test('burn report binds the image to eMMC, FIP and rootfs evidence', async (cont
   assert.equal(result.schemaVersion, 4);
   assert.equal(result.status, 'format-valid / hardware-unverified');
   assert.equal(result.board, 'ZXV10 B860AV1.1-T');
-  assert.equal(result.emmcBoot.strategy, 'vendor-fip-mainline-bl33-extlinux');
-  assert.equal(result.mainlineFip.uboot.defaultBootCommand, 'run distro_bootcmd');
+  assert.equal(result.emmcBoot.strategy, 'vendor-fip-mainline-bl33-fit');
+  assert.equal(result.mainlineFip.uboot.fitSectors, 8);
   assert.deepEqual(result.rootfs, { logicalBytes: 3145728000, availableBytes: 5584080896 });
   assert.equal(result.burn.size, 4);
   assert.equal(result.source.name, 'Armbian_test.img.gz');
@@ -84,5 +84,5 @@ test('burn report CLI emits machine-readable bound evidence', (context) => {
   const report = JSON.parse(result.stdout);
   assert.equal(report.schemaVersion, 4);
   assert.equal(report.burn.name, 'burn.img');
-  assert.equal(report.emmcBoot.strategy, 'vendor-fip-mainline-bl33-extlinux');
+  assert.equal(report.emmcBoot.strategy, 'vendor-fip-mainline-bl33-fit');
 });

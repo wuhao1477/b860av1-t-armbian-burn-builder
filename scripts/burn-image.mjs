@@ -14,11 +14,8 @@ import { validateStandaloneDtb } from '../src/burn-standalone-dtb.mjs';
 import { validateDirectBootContract } from '../src/direct-boot-contract.mjs';
 import {
   inspectBurnPackagePartitions,
-  inspectDosMbr,
-  inspectFatBootImage,
-  inspectFatBootFiles,
+  inspectRawFitImage,
   validateEmmcBootChain,
-  writeDosMbr,
 } from '../src/emmc-boot-chain.mjs';
 
 export { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-sparse.mjs';
@@ -26,11 +23,8 @@ export { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-rol
 export { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
 export {
   inspectBurnPackagePartitions,
-  inspectDosMbr,
-  inspectFatBootImage,
-  inspectFatBootFiles,
+  inspectRawFitImage,
   validateEmmcBootChain,
-  writeDosMbr,
 } from '../src/emmc-boot-chain.mjs';
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
@@ -333,18 +327,13 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     emmcBootContractPath: args[3], mainlineFipContractPath: args[4],
     rootfsContractPath: args[5],
   })));
-  else if (command === 'dos-mbr' && args.length === 3) console.log(JSON.stringify(
-    writeDosMbr(args[0], Number(args[1]), Number(args[2])),
+  else if (command === 'check-raw-fit' && args.length === 1) console.log(JSON.stringify(
+    inspectRawFitImage(args[0]),
   ));
-  else if (command === 'check-dos-mbr' && args.length === 1) console.log(JSON.stringify(
-    inspectDosMbr(args[0]),
-  ));
-  else if (command === 'check-fat-boot' && args.length === 1) console.log(JSON.stringify(
-    inspectFatBootImage(args[0]),
-  ));
-  else if (command === 'check-emmc-chain' && args.length === 3) console.log(JSON.stringify(
-    validateEmmcBootChain(...args),
-  ));
+  else if (command === 'check-emmc-chain' && args.length === 3) {
+    const evidence = JSON.parse(fs.readFileSync(args[2], 'utf8'));
+    console.log(JSON.stringify(validateEmmcBootChain(args[0], args[1], evidence.uboot), null, 2));
+  }
   else if (command === 'check-burn-partitions' && args.length === 1) console.log(JSON.stringify(
     inspectBurnPackagePartitions(args[0]),
   ));
@@ -358,5 +347,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     replaceLinuxTargetDtb(...args),
   ));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr fat sparse-root | check-burn-partitions package-dir | check-burn-dtb-roles vendor-dtb linux-dtb | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | check-report report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs check-raw-fit fit | check-emmc-chain fit sparse-root mainline-fip-contract | check-burn-partitions package-dir | check-burn-dtb-roles vendor-dtb linux-dtb | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | check-report report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

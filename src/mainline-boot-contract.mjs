@@ -10,6 +10,59 @@ export const MAINLINE_BOOT_LAYOUT = Object.freeze({
   rootStartMiB: 2176,
 });
 
+export const BURN_PARTITION_ARGUMENT = 'blkdevparts=mmcblk2:4M@0(bootloader),64M@36M(reserved),768M@108M(cache),8M@884M(env),4M@900M(conf),32M@912M(logo),32M@952M(recovery),8M@992M(rsv),8M@1008M(tee),32M@1024M(crypt),32M@1064M(misc),32M@1104M(boot),1024M@1144M(system),-@2176M(data)';
+
+const FIT_SOURCE = `/dts-v1/;
+
+/ {
+	description = "ZXV10 B860AV1.1-T Armbian";
+	#address-cells = <1>;
+
+	images {
+		kernel {
+			description = "Armbian ARM64 kernel";
+			data = /incbin/("Image.gz");
+			type = "kernel";
+			arch = "arm64";
+			os = "linux";
+			compression = "gzip";
+			load = <0x01080000>;
+			entry = <0x01080000>;
+			hash-1 { algo = "sha256"; };
+		};
+
+		ramdisk {
+			description = "Armbian initramfs";
+			data = /incbin/("initrd.img");
+			type = "ramdisk";
+			arch = "arm64";
+			os = "linux";
+			compression = "none";
+			hash-1 { algo = "sha256"; };
+		};
+
+		fdt {
+			description = "B860AV1.1-T device tree";
+			data = /incbin/("linux.dtb");
+			type = "flat_dt";
+			arch = "arm64";
+			compression = "none";
+			hash-1 { algo = "sha256"; };
+		};
+	};
+
+	configurations {
+		default = "conf-1";
+		conf-1 {
+			description = "Armbian on ZXV10 B860AV1.1-T";
+			kernel = "kernel";
+			ramdisk = "ramdisk";
+			fdt = "fdt";
+		};
+	};
+};
+`;
+
 export const STOCK_FIP_COMPONENTS = Object.freeze({
   bl2: '0ed67a2ee15629eb4af16b41d2908816d3a4fe7ca591bcec7756fb56afc26417',
   bl30: '99208e665e255330e682db4df321982fa0bf29324f42047f10c1d689ae0e8b07',
@@ -37,31 +90,65 @@ function requirePositiveInteger(value, label) {
   return value;
 }
 
-function requireBootPath(value, label) {
-  if (typeof value !== 'string' || !/^\/[A-Za-z0-9._+/-]+$/u.test(value)
-      || value.split('/').includes('..')) {
-    fail(`${label} path is invalid`);
+function requireSectorAlignedBytes(value, label) {
+  if (!Number.isSafeInteger(value) || value <= 0 || value % SECTOR_BYTES !== 0) {
+    fail(`${label} must be a positive sector-aligned size`);
   }
+  if (value > MAINLINE_BOOT_LAYOUT.bootBytes) fail(`${label} exceeds the boot partition`);
   return value;
 }
 
-export function createExtlinuxConfig(memoryLimitMiB, rootUuid, dtbPath) {
-  if (!Number.isInteger(memoryLimitMiB) || memoryLimitMiB < 256 || memoryLimitMiB > 4096) {
-    fail('memory limit must be an integer from 256 to 4096 MiB');
-  }
+function hex32(value) {
+  return `0x${value.toString(16).padStart(8, '0')}`;
+}
+
+export function createFitSource() {
+  return FIT_SOURCE;
+}
+
+export function createMainlineBootCommand(rootUuid, fitBytes) {
   const uuid = normalizeUuid(rootUuid);
-  const dtb = requireBootPath(dtbPath, 'device tree');
+  const bytes = requireSectorAlignedBytes(fitBytes, 'FIT payload');
+  const sectors = bytes / SECTOR_BYTES;
   return [
-    'TIMEOUT 30',
-    'DEFAULT armbian',
-    '',
-    'LABEL armbian',
-    '  LINUX /Image.gz',
-    '  INITRD /initrd.img',
-    `  FDT ${dtb}`,
-    `  APPEND root=UUID=${uuid} rw rootwait rootfstype=ext4 mem=${memoryLimitMiB}M console=ttyAML0,115200n8 console=tty0 no_console_suspend consoleblank=0 fsck.fix=yes fsck.repair=yes net.ifnames=0 init=/sbin/init`,
-    '',
-  ].join('\n');
+    `setenv bootargs ${BURN_PARTITION_ARGUMENT} root=UUID=${uuid} rw rootwait rootfstype=ext4 mem=1024M console=ttyAML0,115200n8 console=tty0 no_console_suspend consoleblank=0 fsck.fix=yes fsck.repair=yes net.ifnames=0 init=/sbin/init`,
+    'if mmc dev 1',
+    `then if mmc read 0x08000000 ${hex32(MAINLINE_BOOT_LAYOUT.bootStartLba)} ${hex32(sectors)}`,
+    'then bootm 0x08000000',
+    'fi',
+    'fi',
+    'reset',
+  ].join('; ');
+}
+
+export function inspectMainlineBootCommand(command) {
+  if (typeof command !== 'string' || !command.includes(BURN_PARTITION_ARGUMENT)) {
+    fail('fixed boot command lacks the B860 partition layout');
+  }
+  const roots = [...command.matchAll(/(?:^|\s)root=UUID=([0-9a-f-]+)(?=\s|;|$)/giu)];
+  if (roots.length !== 1) fail('fixed boot command must contain one root filesystem UUID');
+  const read = command.match(/\bmmc read (0x[0-9a-f]+) (0x[0-9a-f]+) (0x[0-9a-f]+)(?=\s|;|$)/iu);
+  if (!command.includes('if mmc dev 1') || !read || !command.includes('bootm 0x08000000')) {
+    fail('fixed boot command lacks the eMMC FIT boot pipeline');
+  }
+  const fitLoadAddress = hex32(Number.parseInt(read[1].slice(2), 16));
+  const fitStartLba = Number.parseInt(read[2].slice(2), 16);
+  const fitSectors = Number.parseInt(read[3].slice(2), 16);
+  if (fitLoadAddress !== '0x08000000'
+      || fitStartLba !== MAINLINE_BOOT_LAYOUT.bootStartLba
+      || !Number.isSafeInteger(fitSectors) || fitSectors <= 0
+      || fitSectors > MAINLINE_BOOT_LAYOUT.bootSectors) {
+    fail('fixed boot command FIT geometry is invalid');
+  }
+  if (/distro_bootcmd|storeboot|imgread|ANDROID!|boot_android/iu.test(command)) {
+    fail('fixed boot command contains a prohibited fallback');
+  }
+  return {
+    fitLoadAddress,
+    fitSectors,
+    fitStartLba,
+    rootUuid: normalizeUuid(roots[0][1]),
+  };
 }
 
 function validateVendorComponents(components) {
@@ -85,8 +172,21 @@ function validateUboot(uboot) {
       || !uboot.version.includes('r3300-l')) {
     fail('mainline U-Boot version is invalid');
   }
-  if (uboot.defaultBootCommand !== 'run distro_bootcmd') {
-    fail('mainline U-Boot default boot command must use distro_bootcmd');
+  let boot;
+  try {
+    boot = inspectMainlineBootCommand(uboot.defaultBootCommand);
+  } catch (error) {
+    fail(`mainline U-Boot default boot command is invalid: ${error.message}`);
+  }
+  if (uboot.rootUuid !== boot.rootUuid) fail('mainline U-Boot root UUID differs from bootcmd');
+  if (uboot.fitLoadAddress !== boot.fitLoadAddress) {
+    fail('mainline U-Boot FIT load address differs from bootcmd');
+  }
+  if (uboot.fitStartLba !== boot.fitStartLba) {
+    fail('mainline U-Boot FIT start LBA differs from bootcmd');
+  }
+  if (uboot.fitSectors !== boot.fitSectors) {
+    fail('mainline U-Boot FIT sector count differs from bootcmd');
   }
   if (!Array.isArray(uboot.bootTargets)
       || uboot.bootTargets.some((target) => typeof target !== 'string' || target.length === 0)
@@ -106,7 +206,7 @@ function validateUboot(uboot) {
 export function validateMainlineFipEvidence(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('FIP evidence is invalid');
   if (value.schemaVersion !== 1 || value.status !== 'format-valid / hardware-unverified'
-      || value.strategy !== 'vendor-fip-mainline-bl33-extlinux') {
+      || value.strategy !== 'vendor-fip-mainline-bl33-fit') {
     fail('FIP evidence identity is invalid');
   }
   requirePositiveInteger(value.fip?.size, 'FIP');
