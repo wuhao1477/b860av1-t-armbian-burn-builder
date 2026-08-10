@@ -31,15 +31,22 @@ git -C "$dropbear_src" checkout --detach "${sources[3]}" >/dev/null
 [[ "$(git -C "$busybox_src" rev-parse HEAD)" == "${sources[1]}" ]] || exit 1
 [[ "$(git -C "$dropbear_src" rev-parse HEAD)" == "${sources[3]}" ]] || exit 1
 
-make -C "$busybox_src" defconfig >/dev/null
-sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' "$busybox_src/.config"
-sed -i 's/^CONFIG_TC=y$/# CONFIG_TC is not set/' "$busybox_src/.config"
-grep -qx 'CONFIG_STATIC=y' "$busybox_src/.config"
+busybox_config="$root/config/stock-diagnostic-busybox.config"
+dropbear_config="$root/config/stock-diagnostic-dropbear.h"
+node "$root/scripts/burn-image.mjs" check-diagnostic-build-config \
+  "$busybox_config" "$dropbear_config" >/dev/null
+make -C "$busybox_src" allnoconfig >/dev/null
+node "$root/scripts/burn-image.mjs" merge-busybox-config \
+  "$busybox_src/.config" "$busybox_config" "$busybox_src/.config"
+make -C "$busybox_src" oldconfig < <(yes '') >/dev/null
+node "$root/scripts/burn-image.mjs" check-diagnostic-build-config \
+  "$busybox_src/.config" "$dropbear_config" >/dev/null
 grep -qx '# CONFIG_TC is not set' "$busybox_src/.config"
 make -C "$busybox_src" -j"$(nproc)" CROSS_COMPILE=aarch64-linux-gnu- >/dev/null
 rootfs="$tmp/rootfs"
 make -C "$busybox_src" CROSS_COMPILE=aarch64-linux-gnu- CONFIG_PREFIX="$rootfs" install >/dev/null
 
+cp -- "$dropbear_config" "$dropbear_src/localoptions.h"
 (
   cd "$dropbear_src"
   ./configure --host=aarch64-linux-gnu --enable-static --disable-zlib --disable-syslog \

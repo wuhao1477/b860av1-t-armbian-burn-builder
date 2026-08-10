@@ -54,7 +54,7 @@ else
 fi
 
 mkdir -p /etc/dropbear
-/usr/sbin/dropbear -R -E -s -p 22
+/usr/sbin/dropbear -R -E -p 22
 
 {
   echo 'B860 stock-kernel diagnostic'
