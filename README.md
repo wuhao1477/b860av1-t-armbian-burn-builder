@@ -58,17 +58,17 @@ gh workflow run verify-device.yml \
 
 Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必须携带与具体主板 DDR、电源和安全配置匹配的 BL2/BL30/BL301、USB U-Boot 与持久 bootloader。
 
-当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf` 和原厂 `meson1.dtb`。持久 `bootloader.PARTITION` 保留原厂签名的 BL2/BL30/BL301/BL31，只把 Android BL33 替换为固定提交构建的 U-Boot v2026.01 R3300-L BL33；U-Boot 与 Linux DTB 的 eMMC 时钟都限制为 50 MHz。
+当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf`、`bootloader.PARTITION` 和原厂 `meson1.dtb`。这些文件只作为板级 USB factory-burn 输入，不扩大到其他 B860 硬件批次。
 
-最终包只写入四个分区载荷：512 字节 DOS MBR `1.PARTITION`、主线 BL33 FIP、32 MiB FAT16 `boot.PARTITION` 和 sparse ext4 `data.PARTITION`。FAT16 分区只包含 `Image.gz`、raw `initrd.img`、B860 P212 DTB 和 `extlinux/extlinux.conf`，不包含 Android boot v0、原厂环境或 autoscript。
+直刷包保留 Android boot v0 的 `boot.PARTITION` 文件格式，但其 kernel、raw initrd 和 boot second 全部来自 Armbian。这个格式只是原厂 BL33 的兼容装载接口，不是 Android 用户空间。构建器先向 Linux DTB 合并原厂 BL33 所需的 `/partitions` 和 `gxl_p211_1g` 标识，再把同一 FDT 写入 boot second 和原厂 Amlogic multi-DTB 的 P211 1 GB 槽。真实 Linux DTB 超过原槽时，构建器会在 256 KiB 上限内扩大该槽并顺移后续条目。
 
-`1.PARTITION` 把 FAT16 映射到 eMMC 1104 MiB、把 rootfs 映射到 2176 MiB；extlinux 的 root UUID 必须与 `data.PARTITION` 完全一致。包不生成 `env.PARTITION` 或 `system.PARTITION`。启动路径为原厂签名 BL2/BL30/BL301/BL31 -> 主线 BL33 `distro_bootcmd` -> eMMC `mmc1` FAT16/extlinux -> Armbian kernel/initrd -> Debian rootfs。
+`data.PARTITION` 是 Armbian rootfs 的 Android sparse ext4 表示，root UUID 与 `boot.PARTITION` 的 `root=UUID=` 完全一致。包不再生成 `1.PARTITION`、`env.PARTITION` 或 `system.PARTITION`，避免触发目标旧 BL33 不支持的 raw eMMC 入口。启动路径为原厂签名 FIP -> stock BL33 -> Android boot v0 装载接口 -> Armbian kernel/initrd -> Debian rootfs。
 
-每周直刷工作流只在最新公开 Armbian 输入或直刷配方变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS`、`emmc-boot-contract.json`、`mainline-fip-contract.json`、`rootfs-contract.json` 和 schema 4 `burn-report.json`。独立步骤会重新解包 Amlogic v2 容器，解密 BL33，并重算 FAT16/extlinux、FIP 组件、root UUID 和 8 GB eMMC 容量证据。下载时优先使用 `burn.img.xz`，解压后导入 Amlogic USB Burning Tool。
+每周直刷工作流只在最新公开 Armbian 输入或直刷配方变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS`、`boot-contract.json`、`dtb-contract.json`、`rootfs-contract.json` 和 schema 2 `burn-report.json`。独立步骤会重新解包 Amlogic v2 容器，验证 boot v0、hybrid multi-DTB、root UUID 和 8 GB eMMC 容量，再重算全部契约。下载时优先使用 `burn.img.xz`，解压后导入 Amlogic USB Burning Tool。
 
 raw Armbian 镜像仍主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd` 和 `u-boot.usb`，并验证 MBR 后至 4 MiB 分区起点之间没有启动链。FAT 分区只保留由固定 U-Boot 源码和补丁构建的 `u-boot-s905x-s912.bin`，以及同一字节的 `u-boot.ext`，供外部介质候选使用；它与直刷包是两条不同的启动路径。
 
-raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。直刷包则写入重打包 FIP、MBR、FAT16 boot 和 Debian/Armbian rootfs；原厂签名阶段继续负责 DDR 和安全初始化，主线 BL33 负责进入 extlinux。
+raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。直刷包不改写原厂 bootloader、环境区或 FAT 分区启动脚本，只把 Armbian 的 kernel、initrd、DTB 和 rootfs 放入原厂烧录容器；设备仍保留原厂签名 FIP 负责 DDR 和安全初始化。
 
 ## 静态验证
 
@@ -78,7 +78,7 @@ raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。�
 - gzip、已清零的 MBR bootstrap、真实首分区起点、FAT boot 与 ext4 rootfs 结构正确；
 - rootfs 的 Debian major version 和代号与已验签的 stable 元数据一致，同时标识为 Armbian 并存在正常的 `/sbin/init`；
 - boot 分区包含 kernel、initrd、目标 DTB 和 source-built `u-boot-s905x-s912.bin`/`u-boot.ext` overload，活动配置实际引用 kernel、initrd 与 DTB，并在启动参数中固定保守的 `mem=1024M`（对应 `memoryLimitMiB: 1024`）；
-- 直刷包验证原厂 USB factory 文件摘要、512 字节 MBR、32 MiB FAT16、extlinux 文件集、vendor FIP 阶段、主线 BL33 的 `distro_bootcmd`/`mmc1`、root UUID 和 sparse rootfs 容量，并拒绝 Android boot v0、`env.PARTITION` 与 `system.PARTITION`；这些检查仍不能替代目标盒子的串口启动证据；
+- 直刷包验证原厂 USB factory 文件摘要、Android boot v0 头部、kernel/initrd 直接启动配置、boot second 与 Linux P212 DTB、hybrid multi-DTB 槽位、root UUID 和 sparse rootfs 容量，并拒绝旧 raw eMMC 分区载荷；这些检查仍不能替代目标盒子的串口启动证据；
 - boot 分区拒绝旧版 `u-boot.sd`/`u-boot.usb` 以及未列入允许范围的 bootloader 二进制；
 - kernel 是 ARM64，DTB 必须包含精确的 `amlogic,p212` compatible 项；仅有其他 GXL/S905X compatible 的重命名 DTB 不能通过；
 - rootfs 必须包含与目标 `5.10.y-ophub` 内核 vermagic 一致的 ARM64 `8189fs.ko`，模块自身和 `modules.alias` 必须把 RTL8189FTV 的 SDIO ID `024c:F179` 映射到 `8189fs`，`modules.dep` 必须记录 `cfg80211` 与 `rfkill` 依赖；证据写入 `rtl8189fs-driver.json`；

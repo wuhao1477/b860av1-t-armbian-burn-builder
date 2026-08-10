@@ -1,7 +1,7 @@
 import childProcess from 'node:child_process';
 import fs from 'node:fs';
 
-const P211_DTB_SLOT_BYTES = 36 * 1024;
+const STANDALONE_DTB_BYTES = 256000;
 const ROOT_COMPATIBLES = ['amlogic,p212', 'amlogic,s905x', 'amlogic,meson-gxl'];
 const LEGACY_BINDINGS = [
   'amlogic, Gxbb',
@@ -14,7 +14,7 @@ const HARDWARE_BINDINGS = [
   ['/soc/hdmi-tx@c883a000', 'amlogic,meson-gxl-dw-hdmi'],
 ];
 const EMMC_NODE = '/soc/apb@d0000000/mmc@74000';
-const EMMC_MAX_FREQUENCY_HZ = '50000000';
+const EMMC_MAX_FREQUENCY_HZ = '100000000';
 const PARTITIONS = [
   ['conf', '0 400000', '1'],
   ['logo', '0 2000000', '1'],
@@ -67,12 +67,12 @@ function fdtChildren(dtbPath, node) {
 }
 
 function validateContainer(image) {
-  if (image.length < 8 || image.readUInt32BE(0) !== 0xd00dfeed) {
-    fail('standalone DTB is not a plain FDT');
-  }
+  if (image.length !== STANDALONE_DTB_BYTES) fail('standalone DTB size must be 256000 bytes');
+  if (image.readUInt32BE(0) !== 0xd00dfeed) fail('standalone DTB is not a plain FDT');
   const fdtSize = image.readUInt32BE(4);
-  if (fdtSize !== image.length || fdtSize > P211_DTB_SLOT_BYTES) {
-    fail('standalone DTB must be an unpadded FDT that fits the stock P211 slot');
+  if (fdtSize < 8 || fdtSize >= image.length) fail('standalone DTB FDT size is invalid');
+  if (!image.subarray(fdtSize).every((byte) => byte === 0)) {
+    fail('standalone DTB padding is not zero-filled');
   }
   for (const binding of LEGACY_BINDINGS) {
     if (image.includes(Buffer.from(binding))) fail(`legacy Android DTB binding found: ${binding}`);
@@ -94,7 +94,7 @@ function validateHardware(dtbPath) {
     }
   }
   if (fdtget(dtbPath, EMMC_NODE, 'max-frequency') !== EMMC_MAX_FREQUENCY_HZ) {
-    fail('standalone DTB eMMC max-frequency is not 50000000');
+    fail('standalone DTB eMMC max-frequency is not 100000000');
   }
 }
 
@@ -140,7 +140,7 @@ export function validateStandaloneDtb(dtbPath) {
   validateHardware(dtbPath);
   const partitions = validatePartitions(dtbPath);
   return {
-    size: fdtSize,
+    size: STANDALONE_DTB_BYTES,
     fdtSize,
     target: 'gxl_p211_1g',
     partitions,

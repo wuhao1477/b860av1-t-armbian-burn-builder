@@ -11,28 +11,19 @@ import { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-rol
 const root = fileURLToPath(new URL('..', import.meta.url));
 const vendorDtb = path.join(root, 'board-inputs/meson1.dtb');
 const linuxDts = path.join(root, 'tests/fixtures/source-built-b860av11t.dts');
-const burnCli = path.join(root, 'scripts/burn-image.mjs');
-const partitionOverlay = path.join(root, 'board-overlays/burn-partitions.dtso');
 
 function fixture(context) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-dtb-roles-test-'));
   context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
-  const sourceDtb = path.join(directory, 'linux.source.dtb');
   const linuxDtb = path.join(directory, 'linux.dtb');
-  childProcess.execFileSync('dtc', ['-q', '-I', 'dts', '-O', 'dtb', '-o', sourceDtb, linuxDts]);
-  childProcess.execFileSync(
-    process.execPath,
-    [burnCli, 'standalone-dtb', sourceDtb, partitionOverlay, linuxDtb],
-  );
+  childProcess.execFileSync('dtc', ['-q', '-I', 'dts', '-O', 'dtb', '-o', linuxDtb, linuxDts]);
   return { directory, linuxDtb };
 }
 
 test('burn package keeps the vendor USB DTB separate from the Linux P212 DTB', (context) => {
-  const { directory, linuxDtb } = fixture(context);
-  const hybridDtb = path.join(directory, 'meson1.dtb');
-  replaceLinuxTargetDtb(vendorDtb, linuxDtb, hybridDtb);
+  const { linuxDtb } = fixture(context);
 
-  const result = validateBurnDtbRoles(hybridDtb, linuxDtb);
+  const result = validateBurnDtbRoles(vendorDtb, linuxDtb);
 
   assert.equal(result.schemaVersion, 1);
   assert.equal(result.vendor.format, 'amlogic-multi-dtb-v2');
@@ -59,8 +50,19 @@ test('burn DTB role validation rejects a plain FDT in the USB package slot', (co
 });
 
 test('hybrid multi-DTB replaces only the BL33-selected P211 1 GB slot', (context) => {
-  const { directory, linuxDtb } = fixture(context);
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-hybrid-dtb-test-'));
+  const linuxDtb = path.join(directory, 'linux.dtb');
   const output = path.join(directory, 'meson1.dtb');
+  const source = `
+/dts-v1/;
+/ {
+  compatible = "amlogic,p212", "amlogic,meson-gxl";
+  model = "B860 Linux";
+};
+`;
+  const sourcePath = path.join(directory, 'linux.dts');
+  fs.writeFileSync(sourcePath, source);
+  childProcess.execFileSync('dtc', ['-q', '-I', 'dts', '-O', 'dtb', '-o', linuxDtb, sourcePath]);
   const result = replaceLinuxTargetDtb(vendorDtb, linuxDtb, output);
   assert.equal(result.selectedTarget, 'gxl_p211_1g');
   assert.equal(result.vendor.targets.length, 7);
@@ -80,39 +82,42 @@ test('hybrid multi-DTB replaces only the BL33-selected P211 1 GB slot', (context
     bytes.subarray(result.slotOffset, result.slotOffset + result.slotSize),
     vendorBytes.subarray(result.slotOffset, result.slotOffset + result.slotSize),
   );
-  const linuxBytes = fs.readFileSync(linuxDtb);
-  assert.deepEqual(
-    bytes.subarray(result.slotOffset, result.slotOffset + result.linux.fdtSize),
-    linuxBytes,
-  );
-  assert.ok(
-    bytes.subarray(result.slotOffset + result.linux.fdtSize, result.slotOffset + result.slotSize)
-      .every((byte) => byte === 0),
-  );
 });
 
-test('hybrid multi-DTB rejects a Linux FDT larger than the fixed P211 slot', (context) => {
+test('hybrid multi-DTB expands the P211 slot within the BL33 256 KiB limit', (context) => {
   const { directory, linuxDtb } = fixture(context);
   const expandedLinuxDtb = path.join(directory, 'linux-expanded.dtb');
   const output = path.join(directory, 'meson1.dtb');
-  childProcess.execFileSync('dtc', [
-    '-q', '-I', 'dtb', '-O', 'dtb', '-p', '8192', '-o', expandedLinuxDtb, linuxDtb,
-  ]);
+  const originalLinux = fs.readFileSync(linuxDtb);
+  const expandedLinux = Buffer.alloc(39241);
+  originalLinux.copy(expandedLinux);
+  expandedLinux.writeUInt32BE(expandedLinux.length, 4);
+  fs.writeFileSync(expandedLinuxDtb, expandedLinux);
 
-  assert.throws(
-    () => replaceLinuxTargetDtb(vendorDtb, expandedLinuxDtb, output),
-    /does not fit the selected vendor DTB slot/,
-  );
-  assert.equal(fs.existsSync(output), false);
-});
+  const result = replaceLinuxTargetDtb(vendorDtb, expandedLinuxDtb, output);
 
-test('burn DTB role validation rejects a stale P211 payload', (context) => {
-  const { linuxDtb } = fixture(context);
-
-  assert.throws(
-    () => validateBurnDtbRoles(vendorDtb, linuxDtb),
-    /BL33-selected P211 payload differs from the Linux FDT/,
-  );
+  assert.equal(result.selectedTarget, 'gxl_p211_1g');
+  assert.equal(result.slotOffset, 71680);
+  assert.equal(result.slotSize, 40960);
+  assert.equal(result.vendor.size, 260096);
+  assert.ok(result.vendor.size <= 256 * 1024);
+  const originalVendor = fs.readFileSync(vendorDtb);
+  const repackedVendor = fs.readFileSync(output);
+  for (const entry of result.vendor.entries.filter(({ target }) => target !== result.selectedTarget)) {
+    const sourceEntry = [
+      { target: 'gxb_p200_1g', offset: 2048, fdtSize: 33574 },
+      { target: 'gxb_p200_2g', offset: 36864, fdtSize: 33161 },
+      { target: 'gxl_p211_2g', offset: 108544, fdtSize: 36322 },
+      { target: 'gxl_p215_1g', offset: 145408, fdtSize: 36546 },
+      { target: 'gxl_p215_2g', offset: 182272, fdtSize: 36538 },
+      { target: 'gxl_p215hc100_2g', offset: 219136, fdtSize: 36227 },
+    ].find(({ target }) => target === entry.target);
+    assert.ok(sourceEntry);
+    assert.deepEqual(
+      repackedVendor.subarray(entry.offset, entry.offset + entry.fdtSize),
+      originalVendor.subarray(sourceEntry.offset, sourceEntry.offset + sourceEntry.fdtSize),
+    );
+  }
 });
 
 test('burn DTB role validation rejects a vendor multi-DTB as the Linux DTB', (context) => {

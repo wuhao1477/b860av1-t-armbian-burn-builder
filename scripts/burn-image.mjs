@@ -13,34 +13,52 @@ import { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
 import { validateStandaloneDtb } from '../src/burn-standalone-dtb.mjs';
 import { validateDirectBootContract } from '../src/direct-boot-contract.mjs';
 import {
-  inspectBurnPackagePartitions,
   inspectDosMbr,
   inspectFatBootImage,
   inspectFatBootFiles,
+  inspectUbootEnvironment,
   validateEmmcBootChain,
   writeDosMbr,
+  writeUbootEnvironment,
 } from '../src/emmc-boot-chain.mjs';
 
 export { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-sparse.mjs';
 export { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-roles.mjs';
 export { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
 export {
-  inspectBurnPackagePartitions,
   inspectDosMbr,
   inspectFatBootImage,
   inspectFatBootFiles,
+  inspectUbootEnvironment,
   validateEmmcBootChain,
   writeDosMbr,
+  writeUbootEnvironment,
 } from '../src/emmc-boot-chain.mjs';
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
+const STOCK_BOOTLOADER_BYTES = 768 * 1024;
 const STOCK_BOOTM_BYTES = 64 * 1024 * 1024;
-const P211_DTB_SLOT_BYTES = 36 * 1024;
+const STANDALONE_DTB_BYTES = 256000;
 const ANDROID_BOOT_PAGE_BYTES = 2048;
 const BURN_PARTITION_ARGUMENT = 'blkdevparts=mmcblk2:4M@0(bootloader),64M@36M(reserved),768M@108M(cache),8M@884M(env),4M@900M(conf),32M@912M(logo),32M@952M(recovery),8M@992M(rsv),8M@1008M(tee),32M@1024M(crypt),32M@1064M(misc),32M@1104M(boot),1024M@1144M(system),-@2176M(data)';
 
 function fail(message) { throw new Error(message); }
 function u32(buffer, offset, value) { buffer.writeUInt32LE(value >>> 0, offset); }
+
+export function validateStockBootloader(inputPath, configPath) {
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const expected = config.files?.['bootloader.PARTITION'];
+  if (typeof expected !== 'string' || !/^[0-9a-f]{64}$/u.test(expected)) {
+    fail('stock bootloader sha256 contract is invalid');
+  }
+  const input = fs.readFileSync(inputPath);
+  if (input.length !== STOCK_BOOTLOADER_BYTES) {
+    fail('stock bootloader size mismatch');
+  }
+  const sha256 = crypto.createHash('sha256').update(input).digest('hex');
+  if (sha256 !== expected) fail('stock bootloader sha256 mismatch');
+  return { source: 'stock-vendor-bl33', sha256, size: input.length };
+}
 
 function align(value, boundary) {
   return Math.ceil(value / boundary) * boundary;
@@ -68,8 +86,7 @@ function inspectBootCommandLine(image) {
 export function writeStandaloneDtb(inputPath, overlayPath, outputPath) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-standalone-dtb-'));
   const compiledOverlay = path.join(directory, 'burn-partitions.dtbo');
-  const mergedDtb = path.join(directory, 'meson1.merged.dtb');
-  const compactDtb = path.join(directory, 'meson1.compact.dtb');
+  const mergedDtb = path.join(directory, 'meson1.unpadded.dtb');
   try {
     childProcess.execFileSync(
       'dtc',
@@ -79,26 +96,18 @@ export function writeStandaloneDtb(inputPath, overlayPath, outputPath) {
       'fdtoverlay',
       ['-i', inputPath, '-o', mergedDtb, compiledOverlay],
     );
-    const rootNodes = childProcess.execFileSync('fdtget', ['-l', mergedDtb, '/'], {
-      encoding: 'utf8',
-    }).trim().split(/\r?\n/u);
-    if (rootNodes.includes('__symbols__')) {
-      childProcess.execFileSync('fdtput', ['-r', mergedDtb, '/__symbols__']);
-    }
-    childProcess.execFileSync(
-      'dtc',
-      ['-q', '-I', 'dtb', '-O', 'dtb', '-o', compactDtb, mergedDtb],
-    );
-    const compact = fs.readFileSync(compactDtb);
-    if (compact.length < 8 || compact.readUInt32BE(0) !== 0xd00dfeed) {
+    const merged = fs.readFileSync(mergedDtb);
+    if (merged.length < 8 || merged.readUInt32BE(0) !== 0xd00dfeed) {
       fail('standalone DTB overlay output is not an FDT');
     }
-    const fdtSize = compact.readUInt32BE(4);
-    if (fdtSize !== compact.length || fdtSize > P211_DTB_SLOT_BYTES) {
+    const fdtSize = merged.readUInt32BE(4);
+    if (fdtSize < 8 || fdtSize > merged.length || fdtSize > STANDALONE_DTB_BYTES) {
       fail('standalone DTB overlay output size is invalid');
     }
-    fs.writeFileSync(outputPath, compact);
-    return { size: compact.length, fdtSize };
+    const output = Buffer.alloc(STANDALONE_DTB_BYTES);
+    merged.copy(output, 0, 0, fdtSize);
+    fs.writeFileSync(outputPath, output);
+    return { size: output.length, fdtSize };
   } finally {
     fs.rmSync(directory, { recursive: true, force: true });
   }
@@ -123,9 +132,8 @@ export function extractBootSecondDtb(bootPath, outputPath) {
   return inspected;
 }
 
-function bootPayload(image, sizeOffset, start, allowEmpty = false) {
+function bootPayload(image, sizeOffset, start) {
   const size = image.readUInt32LE(sizeOffset);
-  if (size === 0 && allowEmpty) return { payload: Buffer.alloc(0), next: start };
   if (size === 0 || start + size > image.length) fail('Android boot payload is invalid');
   return { payload: image.subarray(start, start + size), next: start + align(size, ANDROID_BOOT_PAGE_BYTES) };
 }
@@ -158,11 +166,8 @@ export function validateStockBoot(bootPath, expectedRootUuid) {
   const kernelLoadAddress = image.readUInt32LE(12);
   if (kernelLoadAddress !== 0x01080000) fail('stock boot kernel load address is invalid');
   const kernelPart = bootPayload(image, 8, pageSize);
-  const ramdiskPart = bootPayload(image, 16, kernelPart.next, true);
+  const ramdiskPart = bootPayload(image, 16, kernelPart.next);
   const secondPart = bootPayload(image, 24, ramdiskPart.next);
-  if (ramdiskPart.payload.length !== 0) {
-    fail('stock direct-root boot must not contain an initramfs');
-  }
   if (ramdiskPart.payload.length >= 4 && ramdiskPart.payload.readUInt32BE(0) === 0x27051956) {
     fail('Android boot ramdisk contains a legacy uInitrd header');
   }
@@ -319,20 +324,28 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'extract-boot-second' && args.length === 2) console.log(JSON.stringify(
     extractBootSecondDtb(...args),
   ));
+  else if (command === 'check-stock-bootloader' && args.length === 2) console.log(JSON.stringify(
+    validateStockBootloader(...args),
+  ));
   else if (command === 'check-stock-boot' && (args.length === 1 || args.length === 2)) console.log(JSON.stringify(validateStockBoot(...args)));
   else if (command === 'sparse-ext4-uuid' && args.length === 1) console.log(readSparseExt4Uuid(args[0]));
   else if (command === 'check-sparse-capacity' && args.length === 4) console.log(JSON.stringify(
     validateSparseCapacity(args[0], Number(args[1]), Number(args[2]), Number(args[3])),
   ));
   else if (command === 'report' && args.length === 5) console.log(JSON.stringify(await buildBurnReport({
-    burnPath: args[0], rawSourcePath: args[1], emmcBootContractPath: args[2],
-    mainlineFipContractPath: args[3], rootfsContractPath: args[4],
+    burnPath: args[0], rawSourcePath: args[1], bootContractPath: args[2],
+    dtbContractPath: args[3], rootfsContractPath: args[4],
   })));
   else if (command === 'check-report' && args.length === 6) console.log(JSON.stringify(await validateBurnReport({
-    reportPath: args[0], burnPath: args[1], rawSourcePath: args[2],
-    emmcBootContractPath: args[3], mainlineFipContractPath: args[4],
-    rootfsContractPath: args[5],
+    reportPath: args[0], burnPath: args[1], rawSourcePath: args[2], bootContractPath: args[3],
+    dtbContractPath: args[4], rootfsContractPath: args[5],
   })));
+  else if (command === 'uboot-env' && args.length === 2) console.log(JSON.stringify(
+    writeUbootEnvironment(args[0], args[1]),
+  ));
+  else if (command === 'check-uboot-env' && args.length === 1) console.log(JSON.stringify(
+    inspectUbootEnvironment(args[0]),
+  ));
   else if (command === 'dos-mbr' && args.length === 3) console.log(JSON.stringify(
     writeDosMbr(args[0], Number(args[1]), Number(args[2])),
   ));
@@ -342,11 +355,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'check-fat-boot' && args.length === 1) console.log(JSON.stringify(
     inspectFatBootImage(args[0]),
   ));
-  else if (command === 'check-emmc-chain' && args.length === 3) console.log(JSON.stringify(
+  else if (command === 'check-emmc-chain' && args.length === 4) console.log(JSON.stringify(
     validateEmmcBootChain(...args),
-  ));
-  else if (command === 'check-burn-partitions' && args.length === 1) console.log(JSON.stringify(
-    inspectBurnPackagePartitions(args[0]),
   ));
   else if (command === 'check-burn-dtb-roles' && args.length === 2) console.log(JSON.stringify(
     validateBurnDtbRoles(...args),
@@ -358,5 +368,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     replaceLinuxTargetDtb(...args),
   ));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr fat sparse-root | check-burn-partitions package-dir | check-burn-dtb-roles vendor-dtb linux-dtb | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | check-report report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-bootloader bootloader config | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

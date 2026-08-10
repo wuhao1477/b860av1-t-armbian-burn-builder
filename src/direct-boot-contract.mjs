@@ -19,10 +19,6 @@ const REQUIRED_CONFIG = [
   'CONFIG_PHY_MESON_GXL_USB2',
   'CONFIG_STMMAC_ETH',
 ];
-const DIRECT_ROOT_CONFIG = [
-  'CONFIG_DEVTMPFS',
-  'CONFIG_DEVTMPFS_MOUNT',
-];
 const INITRD_CODECS = [
   { name: 'gzip', magic: Buffer.from([0x1f, 0x8b]), config: 'CONFIG_RD_GZIP' },
   { name: 'xz', magic: Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0x00]), config: 'CONFIG_RD_XZ' },
@@ -62,7 +58,6 @@ export function extractKernelConfig(kernel) {
 }
 
 export function inspectInitrdCodec(initrd) {
-  if (initrd.length === 0) return { name: 'none', config: null };
   const codec = INITRD_CODECS.find(({ magic }) => startsWith(initrd, magic));
   if (codec) return codec;
   if (['070701', '070702', '070707'].some((magic) => startsWith(initrd, Buffer.from(magic)))) {
@@ -75,11 +70,7 @@ export function validateDirectBootContract(kernel, initrd) {
   const configContents = extractKernelConfig(kernel);
   const config = parseKernelConfig(configContents);
   const codec = inspectInitrdCodec(initrd);
-  const required = [
-    ...REQUIRED_CONFIG,
-    ...(codec.name === 'none' ? DIRECT_ROOT_CONFIG : []),
-    codec.config,
-  ].filter(Boolean);
+  const required = [...REQUIRED_CONFIG, codec.config].filter(Boolean);
   const observed = {};
   for (const name of required) {
     const value = config.get(name);

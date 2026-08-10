@@ -19,27 +19,27 @@ async function readJson(filePath) {
 }
 
 export async function buildBurnReport({
+  bootContractPath,
   burnPath,
-  emmcBootContractPath,
-  mainlineFipContractPath,
+  dtbContractPath,
   rawSourcePath,
   rootfsContractPath,
 }) {
-  const [burn, source, emmcBoot, mainlineFip, rootfs] = await Promise.all([
+  const [burn, source, boot, deviceTree, rootfs] = await Promise.all([
     fileEvidence(burnPath),
     fileEvidence(rawSourcePath),
-    readJson(emmcBootContractPath),
-    readJson(mainlineFipContractPath),
+    readJson(bootContractPath),
+    readJson(dtbContractPath),
     readJson(rootfsContractPath),
   ]);
   return {
-    schemaVersion: 4,
+    schemaVersion: 2,
     status: 'format-valid / hardware-unverified',
     board: 'ZXV10 B860AV1.1-T',
     burn,
     source,
-    emmcBoot,
-    mainlineFip,
+    boot,
+    deviceTree,
     rootfs,
   };
 }
