@@ -1,0 +1,78 @@
+#!/bin/busybox sh
+
+B860_STOCK_KERNEL_DIAGNOSTIC=1
+export B860_STOCK_KERNEL_DIAGNOSTIC
+export HOME=/root
+export PATH=/sbin:/usr/sbin:/bin:/usr/bin
+
+mkdir -p /dev /proc /sys /run /tmp
+mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+mkdir -p /dev/pts /dev/shm
+mount -t devpts devpts /dev/pts 2>/dev/null || true
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t tmpfs tmpfs /run
+mount -t tmpfs tmpfs /tmp
+echo /sbin/mdev > /proc/sys/kernel/hotplug
+mdev -s
+hostname b860-diag
+
+emit() {
+  message="B860-DIAG: $*"
+  echo "$message" > /dev/kmsg 2>/dev/null || true
+  echo "$message" > /dev/console 2>/dev/null || true
+  echo "$message" > /dev/tty0 2>/dev/null || true
+}
+
+emit "stock Linux 3.14 kernel entered /init"
+
+for led in /sys/class/leds/*; do
+  [ -d "$led" ] || continue
+  echo timer > "$led/trigger" 2>/dev/null || echo 1 > "$led/brightness" 2>/dev/null || true
+done
+
+ip link set lo up
+iface=''
+for network_path in /sys/class/net/*; do
+  candidate=${network_path##*/}
+  [ "$candidate" = lo ] && continue
+  iface=$candidate
+  break
+done
+
+if [ -n "$iface" ]; then
+  ip link set "$iface" up
+  if udhcpc -f -q -n -t 5 -T 3 -i "$iface" -x hostname:b860-diag \
+      -s /usr/share/udhcpc/diagnostic.script; then
+    emit "DHCP configured $iface"
+  else
+    ifconfig "$iface" 169.254.86.10 netmask 255.255.0.0 up
+    emit "DHCP failed; fallback is 169.254.86.10"
+  fi
+else
+  emit "no Ethernet interface was registered"
+fi
+
+mkdir -p /etc/dropbear
+/usr/sbin/dropbear -R -E -s -p 22
+
+{
+  echo 'B860 stock-kernel diagnostic'
+  echo
+  echo 'Kernel:'
+  uname -a
+  echo
+  echo 'Command line:'
+  cat /proc/cmdline
+  echo
+  echo 'Network:'
+  ip addr show
+} > /www/index.txt
+httpd -p 80 -h /www
+
+emit "SSH root@$(ip -4 addr show dev "$iface" 2>/dev/null | awk '/inet / {print $2}' | head -n1)"
+
+while true; do
+  setsid cttyhack /bin/sh
+  sleep 1
+done

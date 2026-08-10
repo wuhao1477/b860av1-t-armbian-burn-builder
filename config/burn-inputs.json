@@ -2,6 +2,26 @@
   "board": "ZXV10 B860AV1.1-T",
   "soc": "Amlogic S905L / P212",
   "status": "hardware-unverified",
+  "stockBoot": {
+    "file": "stock-boot.PARTITION",
+    "sha256": "c2686dabba33436d57397fbe690021d92c9d81951ccbed31db90889edf3da999",
+    "size": 8326952
+  },
+  "stockLogo": {
+    "file": "logo.PARTITION",
+    "sha256": "2fa846726b8cbfac807698335c46377bb25d2199ebdae6606b795674b38d6335",
+    "size": 9195984
+  },
+  "diagnosticSources": {
+    "busybox": {
+      "repository": "https://github.com/mirror/busybox.git",
+      "commit": "1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4"
+    },
+    "dropbear": {
+      "repository": "https://github.com/mkj/dropbear.git",
+      "commit": "155639d40113a8ffc61aff3078e49f6e20090481"
+    }
+  },
   "files": {
     "DDR.USB": "0ed67a2ee15629eb4af16b41d2908816d3a4fe7ca591bcec7756fb56afc26417",
     "UBOOT.USB": "93b963251ed4ac7395ec5e918ef0526f533cebba0646fd8fb2d85d3499106647",
@@ -9,6 +29,8 @@
     "aml_sdc_burn.ini": "e8d93f46803e26ce8457f902edd348806cbb88c8ef706deea2eb441879f0a5cc",
     "platform.conf": "89202ec0a07edd091b8aba6589bb1d40471bfde875a35dfe5a5571cb447ea701",
     "bootloader.PARTITION": "50b0fb65121e6a7e174f11f556e03d80532feccac747b4f4a646af5bde7f8ba8",
-    "meson1.dtb": "1a859e2c88057cf908cd20939dec88f93978d59a17ee2633eb3a991adf4e56e4"
+    "meson1.dtb": "1a859e2c88057cf908cd20939dec88f93978d59a17ee2633eb3a991adf4e56e4",
+    "stock-boot.PARTITION": "c2686dabba33436d57397fbe690021d92c9d81951ccbed31db90889edf3da999",
+    "logo.PARTITION": "2fa846726b8cbfac807698335c46377bb25d2199ebdae6606b795674b38d6335"
   }
 }

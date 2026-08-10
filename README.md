@@ -70,6 +70,14 @@ raw Armbian 镜像仍主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd
 
 raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。直刷包不改写原厂 bootloader、环境区或 FAT 分区启动脚本，只把 Armbian 的 kernel、initrd、DTB 和 rootfs 放入原厂烧录容器；设备仍保留原厂签名 FIP 负责 DDR 和安全初始化。
 
+### 原厂内核诊断包
+
+修复分支可手动构建独立诊断包。它逐字节保留原厂 Linux 3.14 kernel、
+multi-DTB、BL33 和 logo，只把原 Android ramdisk 替换为静态 BusyBox 与
+Dropbear initramfs。该包不是 Debian/Armbian，仅用于判断故障位于现代
+kernel/DTB，还是更早的 eMMC/boot 读取阶段；实机确认前状态始终为
+`format-valid / diagnostic / hardware-unverified`。
+
 ## 静态验证
 
 云端构建会检查：

@@ -13,6 +13,12 @@ import { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
 import { validateStandaloneDtb } from '../src/burn-standalone-dtb.mjs';
 import { validateDirectBootContract } from '../src/direct-boot-contract.mjs';
 import {
+  replaceAndroidBootRamdisk,
+  validateDiagnosticInitramfs,
+  validateStockDiagnosticInputs,
+  validateStockDiagnosticBoot,
+} from '../src/stock-kernel-diagnostic.mjs';
+import {
   inspectDosMbr,
   inspectFatBootImage,
   inspectFatBootFiles,
@@ -25,6 +31,12 @@ import {
 export { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-sparse.mjs';
 export { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-roles.mjs';
 export { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
+export {
+  replaceAndroidBootRamdisk,
+  validateDiagnosticInitramfs,
+  validateStockDiagnosticInputs,
+  validateStockDiagnosticBoot,
+} from '../src/stock-kernel-diagnostic.mjs';
 export {
   inspectDosMbr,
   inspectFatBootImage,
@@ -328,6 +340,18 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     validateStockBootloader(...args),
   ));
   else if (command === 'check-stock-boot' && (args.length === 1 || args.length === 2)) console.log(JSON.stringify(validateStockBoot(...args)));
+  else if (command === 'replace-stock-ramdisk' && args.length === 3) console.log(JSON.stringify(
+    replaceAndroidBootRamdisk(...args),
+  ));
+  else if (command === 'check-diagnostic-initramfs' && args.length === 1) console.log(JSON.stringify(
+    validateDiagnosticInitramfs(...args),
+  ));
+  else if (command === 'check-stock-diagnostic-inputs' && args.length === 2) console.log(JSON.stringify(
+    validateStockDiagnosticInputs(...args),
+  ));
+  else if (command === 'check-stock-diagnostic-boot' && args.length === 4) console.log(JSON.stringify(
+    validateStockDiagnosticBoot(...args),
+  ));
   else if (command === 'sparse-ext4-uuid' && args.length === 1) console.log(readSparseExt4Uuid(args[0]));
   else if (command === 'check-sparse-capacity' && args.length === 4) console.log(JSON.stringify(
     validateSparseCapacity(args[0], Number(args[1]), Number(args[2]), Number(args[3])),

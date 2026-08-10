@@ -1,8 +1,24 @@
 # Third-party source availability
 
-This document accompanies every schema 8 release. The project repository is
-source-only and does not contain vendor DDR, BL2, BL30/BL301, factory U-Boot,
-Android system, recovery, APK, or Amlogic USB Burning Tool payloads.
+This document accompanies every schema 8 release. The raw Armbian build path is
+source-built except for its documented upstream kernel, package and firmware
+inputs. The direct-burn path also contains byte-pinned, user-supplied vendor
+board inputs required by Amlogic USB Burning Tool. It does not contain Android
+system, recovery, APK or Amlogic USB Burning Tool software.
+
+## Vendor direct-burn inputs
+
+`config/burn-inputs.json` records the exact SHA-256 of the B860 factory DDR,
+USB U-Boot, persistent bootloader and multi-DTB inputs. The stock-kernel
+diagnostic additionally retains the original Linux 3.14 kernel, boot multi-DTB
+and logo while replacing only the Android ramdisk. These binaries are not
+covered by this repository's MIT license and are not represented as source-
+reproducible components.
+
+The diagnostic initramfs builds BusyBox from commit
+`1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4` and Dropbear from commit
+`155639d40113a8ffc61aff3078e49f6e20090481`. Their upstream GPL-2.0 and MIT-like
+license terms continue to apply.
 
 ## Exact release inputs
 

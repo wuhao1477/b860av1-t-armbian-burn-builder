@@ -368,3 +368,28 @@ test('burn workflow follows the public raw release and publishes direct-boot con
   assert.match(workflow, /schedule:\s*\n\s*- cron:\s*['"]23 3 \* \* 1['"]/);
   assert.doesNotMatch(workflow, /workflow_run:/);
 });
+
+test('burn workflow builds the stock-kernel diagnostic only on a manually selected branch', () => {
+  const workflow = read('.github/workflows/weekly-burn-build.yml');
+
+  assert.match(workflow, /detect:\s*\n\s*if:\s*.*default_branch/);
+  assert.match(
+    workflow,
+    /stock_diagnostic_build:[\s\S]+github\.event_name == 'workflow_dispatch'[\s\S]+github\.ref_name != github\.event\.repository\.default_branch/,
+  );
+  assert.match(workflow, /build-stock-diagnostic-initramfs\.sh/);
+  assert.match(workflow, /build-stock-diagnostic-burn\.sh/);
+  assert.match(workflow, /validate-stock-diagnostic-burn\.sh/);
+  assert.match(workflow, /qemu-user-static/);
+  assert.match(workflow, /gcc-aarch64-linux-gnu/);
+  assert.match(workflow, /xz -t out\/burn\.img\.xz/);
+  for (const asset of [
+    'burn.img', 'burn.img.xz', 'diagnostic-inputs-contract.json',
+    'diagnostic-initramfs-contract.json', 'diagnostic-boot-contract.json',
+  ]) {
+    const matches = workflow.match(new RegExp(asset.replaceAll('.', '\\.'), 'g')) ?? [];
+    assert.ok(matches.length >= 3, `${asset} is not checksummed, uploaded, and published`);
+  }
+  assert.match(workflow, /Purpose: stock-kernel diagnostic/);
+  assert.match(workflow, /Status: format-valid \/ diagnostic \/ hardware-unverified/);
+});
