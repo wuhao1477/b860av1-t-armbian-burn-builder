@@ -33,7 +33,6 @@ git -C "$dropbear_src" checkout --detach "${sources[3]}" >/dev/null
 
 make -C "$busybox_src" defconfig >/dev/null
 sed -i 's/# CONFIG_STATIC is not set/CONFIG_STATIC=y/' "$busybox_src/.config"
-make -C "$busybox_src" olddefconfig >/dev/null
 make -C "$busybox_src" -j"$(nproc)" CROSS_COMPILE=aarch64-linux-gnu- >/dev/null
 rootfs="$tmp/rootfs"
 make -C "$busybox_src" CROSS_COMPILE=aarch64-linux-gnu- CONFIG_PREFIX="$rootfs" install >/dev/null
