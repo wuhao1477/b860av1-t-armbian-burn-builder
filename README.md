@@ -74,7 +74,8 @@ raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。�
 
 修复分支可手动构建独立诊断包。它逐字节保留原厂 Linux 3.14 kernel、
 multi-DTB、BL33 和 logo，只把原 Android ramdisk 替换为静态 BusyBox 与
-Dropbear initramfs。该包不是 Debian/Armbian，仅用于判断故障位于现代
+HTTP-only initramfs。诊断 ramdisk 必须小于原厂 ramdisk，不包含 SSH 服务。
+该包不是 Debian/Armbian，仅用于判断故障位于现代
 kernel/DTB，还是更早的 eMMC/boot 读取阶段；实机确认前状态始终为
 `format-valid / diagnostic / hardware-unverified`。
 

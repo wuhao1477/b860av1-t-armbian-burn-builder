@@ -24,44 +24,29 @@ function fixture(context) {
   return directory;
 }
 
-test('diagnostic build accepts a minimal public-key-only runtime configuration', () => {
-  const dropbear = [
-    '#define DROPBEAR_SVR_PASSWORD_AUTH 0',
-    '#define DROPBEAR_SVR_PAM_AUTH 0',
-    '#define DROPBEAR_SVR_PUBKEY_AUTH 1',
-  ].join('\n');
-
+test('diagnostic build accepts a minimal HTTP-only runtime configuration', () => {
   assert.deepEqual(
-    burnImage.validateDiagnosticBuildConfiguration(busyboxConfig(), dropbear),
-    { passwordAuthentication: false, publicKeyAuthentication: true },
+    burnImage.validateDiagnosticBuildConfiguration(busyboxConfig()),
+    { remoteAccess: 'http-only' },
   );
 });
 
-test('diagnostic build rejects Dropbear password authentication', () => {
-  const dropbear = [
-    '#define DROPBEAR_SVR_PASSWORD_AUTH 1',
-    '#define DROPBEAR_SVR_PAM_AUTH 0',
-    '#define DROPBEAR_SVR_PUBKEY_AUTH 1',
-  ].join('\n');
-
+test('diagnostic build rejects a missing HTTP server', () => {
   assert.throws(
-    () => burnImage.validateDiagnosticBuildConfiguration(busyboxConfig(), dropbear),
-    /public-key-only server authentication/,
+    () => burnImage.validateDiagnosticBuildConfiguration(
+      busyboxConfig().replace('CONFIG_HTTPD=y', '# CONFIG_HTTPD is not set'),
+    ),
+    /CONFIG_HTTPD=y/,
   );
 });
 
 test('repository diagnostic tool configuration satisfies the runtime contract', () => {
   const busyboxPath = new URL('../config/stock-diagnostic-busybox.config', import.meta.url);
-  const dropbearPath = new URL('../config/stock-diagnostic-dropbear.h', import.meta.url);
   assert.equal(fs.existsSync(busyboxPath), true, 'missing BusyBox diagnostic configuration');
-  assert.equal(fs.existsSync(dropbearPath), true, 'missing Dropbear diagnostic configuration');
 
   assert.deepEqual(
-    burnImage.validateDiagnosticBuildConfiguration(
-      fs.readFileSync(busyboxPath, 'utf8'),
-      fs.readFileSync(dropbearPath, 'utf8'),
-    ),
-    { passwordAuthentication: false, publicKeyAuthentication: true },
+    burnImage.validateDiagnosticBuildConfiguration(fs.readFileSync(busyboxPath, 'utf8')),
+    { remoteAccess: 'http-only' },
   );
 });
 
@@ -103,12 +88,8 @@ test('diagnostic build config CLI validates repository tool configuration', () =
     fileURLToPath(new URL('../scripts/burn-image.mjs', import.meta.url)),
     'check-diagnostic-build-config',
     fileURLToPath(new URL('../config/stock-diagnostic-busybox.config', import.meta.url)),
-    fileURLToPath(new URL('../config/stock-diagnostic-dropbear.h', import.meta.url)),
   ], { encoding: 'utf8' });
 
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(JSON.parse(result.stdout), {
-    passwordAuthentication: false,
-    publicKeyAuthentication: true,
-  });
+  assert.deepEqual(JSON.parse(result.stdout), { remoteAccess: 'http-only' });
 });

@@ -53,9 +53,6 @@ else
   emit "no Ethernet interface was registered"
 fi
 
-mkdir -p /etc/dropbear
-/usr/sbin/dropbear -R -E -p 22
-
 {
   echo 'B860 stock-kernel diagnostic'
   echo
@@ -70,7 +67,8 @@ mkdir -p /etc/dropbear
 } > /www/index.txt
 httpd -p 80 -h /www
 
-emit "SSH root@$(ip -4 addr show dev "$iface" 2>/dev/null | awk '/inet / {print $2}' | head -n1)"
+address=$(ip -4 addr show dev "$iface" 2>/dev/null | awk '/inet / {print $2}' | head -n1)
+emit "HTTP status http://${address%/*}/index.txt"
 
 while true; do
   setsid cttyhack /bin/sh

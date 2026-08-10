@@ -149,18 +149,22 @@ export function validateDiagnosticInitramfs(inputPath) {
   const entries = parseNewc(archive);
   const init = requireExecutable(entries, 'init').toString('utf8');
   requireArm64Elf(entries, 'bin/busybox');
-  requireArm64Elf(entries, 'usr/sbin/dropbear');
+  requireFile(entries, 'www/index.html');
   const release = requireFile(entries, 'etc/b860-diagnostic-release').toString('utf8');
-  const authorizedKeys = requireFile(entries, 'root/.ssh/authorized_keys').toString('utf8');
   if (!init.includes(DIAGNOSTIC_MARKER) || !release.includes(DIAGNOSTIC_MARKER)) {
     fail(`initramfs marker is missing: ${DIAGNOSTIC_MARKER}`);
   }
-  if (!/^(?:ssh-(?:rsa|ed25519)|ecdsa-sha2-)/mu.test(authorizedKeys)) {
-    fail('initramfs authorized_keys is invalid');
+  if (!/\bhttpd\s+-p\s+80\s+-h\s+\/www\b/u.test(init)) {
+    fail('initramfs must start the HTTP status server');
+  }
+  if (entries.has('usr/sbin/dropbear') || entries.has('usr/bin/dropbearkey')
+      || entries.has('root/.ssh/authorized_keys')) {
+    fail('HTTP-only initramfs must not contain SSH server payloads');
   }
   return {
     format: 'gzip-newc', architecture: 'arm64', marker: DIAGNOSTIC_MARKER,
-    entries: entries.size, size: compressed.length, sha256: sha256(compressed),
+    remoteAccess: 'http-only', entries: entries.size,
+    size: compressed.length, sha256: sha256(compressed),
   };
 }
 
@@ -210,7 +214,6 @@ export function validateStockDiagnosticInputs(boardInputs, configPath) {
     logoSha256: sha256(logo),
     logoSize: logo.length,
     busyboxCommit: validatePinnedSource(config.diagnosticSources?.busybox, 'BusyBox'),
-    dropbearCommit: validatePinnedSource(config.diagnosticSources?.dropbear, 'Dropbear'),
   };
 }
 
@@ -259,6 +262,9 @@ export function validateStockDiagnosticBoot(sourcePath, candidatePath, initramfs
   if (!source.kernel.equals(candidate.kernel)) fail('diagnostic boot stock kernel differs');
   if (!source.second.equals(candidate.second)) fail('diagnostic boot stock multi-DTB differs');
   if (!candidate.ramdisk.equals(initramfs)) fail('diagnostic boot ramdisk differs from initramfs');
+  if (candidate.ramdisk.length > source.ramdisk.length) {
+    fail('diagnostic boot ramdisk exceeds the stock ramdisk size');
+  }
   if (!normalizedHeader(source.header).equals(normalizedHeader(candidate.header))) {
     fail('diagnostic boot changed a protected header field');
   }
@@ -268,7 +274,10 @@ export function validateStockDiagnosticBoot(sourcePath, candidatePath, initramfs
     candidateBootSha256: sha256(candidateImage),
     kernelSha256: sha256(source.kernel),
     sourceRamdiskSha256: sha256(source.ramdisk),
+    sourceRamdiskSize: source.ramdisk.length,
     diagnosticRamdiskSha256: sha256(candidate.ramdisk),
+    diagnosticRamdiskSize: candidate.ramdisk.length,
+    ramdiskHeadroom: source.ramdisk.length - candidate.ramdisk.length,
     secondSha256: sha256(source.second),
     kernelVersion: kernelVersion(source.kernel),
     onlyRamdiskChanged: true,

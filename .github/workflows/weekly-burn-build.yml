@@ -240,7 +240,7 @@ jobs:
       - name: Install diagnostic build tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes autoconf automake build-essential cpio file \
+          sudo apt-get install --yes build-essential cpio file \
             gcc-aarch64-linux-gnu git gzip libc6-dev-arm64-cross qemu-user-static xz-utils
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
@@ -266,9 +266,9 @@ jobs:
             echo 'Purpose: stock-kernel diagnostic'
             echo 'Status: format-valid / diagnostic / hardware-unverified'
             echo 'This is not Debian or Armbian. It preserves the stock Linux 3.14 kernel and multi-DTB.'
-            echo 'Only the stock Android ramdisk is replaced by a minimal BusyBox and Dropbear initramfs.'
-            echo 'DHCP hostname: b860-diag; SSH user: root; password authentication: disabled.'
-            echo 'SSH key fingerprint: SHA256:cZlY9SiSE5Q3mZy6n9F4v6ktU/ZdRmrScHbRqvU7GZw'
+            echo 'Only the stock Android ramdisk is replaced by a minimal BusyBox HTTP-only initramfs.'
+            echo 'This stage intentionally contains no SSH server so the ramdisk remains smaller than stock.'
+            echo 'DHCP hostname: b860-diag; HTTP status path: /index.txt.'
             echo 'DHCP fallback: 169.254.86.10/16; HTTP status port: 80.'
             echo 'The stock Android splash is intentional and only proves that stock U-Boot reached preboot.'
           } > out/RELEASE.md

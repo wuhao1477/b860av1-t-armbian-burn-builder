@@ -55,15 +55,10 @@ function diagnosticInitramfs() {
     {
       name: 'init',
       mode: 0o100755,
-      contents: '#!/bin/busybox sh\nB860_STOCK_KERNEL_DIAGNOSTIC=1\n',
+      contents: '#!/bin/busybox sh\nB860_STOCK_KERNEL_DIAGNOSTIC=1\nhttpd -p 80 -h /www\n',
     },
     { name: 'bin/busybox', mode: 0o100755, contents: arm64Elf('busybox') },
-    { name: 'usr/sbin/dropbear', mode: 0o100755, contents: arm64Elf('dropbear') },
-    {
-      name: 'root/.ssh/authorized_keys',
-      mode: 0o100600,
-      contents: 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCfixture diagnostic@test\n',
-    },
+    { name: 'www/index.html', mode: 0o100644, contents: 'B860 diagnostic\n' },
     {
       name: 'etc/b860-diagnostic-release',
       mode: 0o100644,
@@ -104,10 +99,11 @@ function androidBoot(kernel, ramdisk, second) {
   return Buffer.concat(chunks);
 }
 
-function stockFixture(context) {
+function stockFixture(context, stockRamdisk) {
   const directory = fixture(context);
   const kernel = gzipSync(Buffer.from('Linux version 3.14.29-g57f7ee1\0stock-kernel'));
-  const ramdisk = gzipSync(Buffer.from('stock-android-ramdisk'));
+  const initramfsPayload = diagnosticInitramfs();
+  const ramdisk = stockRamdisk ?? Buffer.alloc(initramfsPayload.length + 4096, 0x5c);
   const second = Buffer.alloc(4096, 0x5a);
   second.write('AML_', 0, 'ascii');
   second.write('gxl_p212_1g', 128, 'ascii');
@@ -115,11 +111,11 @@ function stockFixture(context) {
   const initramfs = path.join(directory, 'diagnostic-initramfs.cpio.gz');
   const output = path.join(directory, 'boot.PARTITION');
   fs.writeFileSync(source, androidBoot(kernel, ramdisk, second));
-  fs.writeFileSync(initramfs, diagnosticInitramfs());
+  fs.writeFileSync(initramfs, initramfsPayload);
   return { directory, source, initramfs, output, kernel, ramdisk, second };
 }
 
-test('diagnostic initramfs requires executable ARM64 BusyBox and Dropbear payloads', (context) => {
+test('diagnostic initramfs requires an ARM64 BusyBox HTTP-only runtime', (context) => {
   const paths = stockFixture(context);
 
   assert.equal(typeof burnImage.validateDiagnosticInitramfs, 'function');
@@ -128,20 +124,17 @@ test('diagnostic initramfs requires executable ARM64 BusyBox and Dropbear payloa
   assert.equal(result.format, 'gzip-newc');
   assert.equal(result.architecture, 'arm64');
   assert.equal(result.marker, 'B860_STOCK_KERNEL_DIAGNOSTIC=1');
+  assert.equal(result.remoteAccess, 'http-only');
   assert.match(result.sha256, /^[0-9a-f]{64}$/);
 });
 
-test('diagnostic initramfs rejects a missing SSH server', (context) => {
+test('diagnostic initramfs rejects a missing HTTP status server', (context) => {
   const directory = fixture(context);
   const input = path.join(directory, 'incomplete.cpio.gz');
   fs.writeFileSync(input, gzipSync(newc([
     { name: 'init', mode: 0o100755, contents: 'B860_STOCK_KERNEL_DIAGNOSTIC=1\n' },
     { name: 'bin/busybox', mode: 0o100755, contents: arm64Elf('busybox') },
-    {
-      name: 'root/.ssh/authorized_keys',
-      mode: 0o100600,
-      contents: 'ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQCfixture diagnostic@test\n',
-    },
+    { name: 'www/index.html', mode: 0o100644, contents: 'B860 diagnostic\n' },
     {
       name: 'etc/b860-diagnostic-release',
       mode: 0o100644,
@@ -151,7 +144,29 @@ test('diagnostic initramfs rejects a missing SSH server', (context) => {
 
   assert.throws(
     () => burnImage.validateDiagnosticInitramfs(input),
-    /usr\/sbin\/dropbear/,
+    /HTTP status server/,
+  );
+});
+
+test('diagnostic boot rejects a ramdisk larger than the stock envelope', (context) => {
+  const paths = stockFixture(context, Buffer.alloc(1));
+  burnImage.replaceAndroidBootRamdisk(paths.source, paths.initramfs, paths.output);
+  const config = path.join(paths.directory, 'diagnostic.json');
+  fs.writeFileSync(config, `${JSON.stringify({
+    stockBoot: {
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(paths.source)).digest('hex'),
+      size: fs.statSync(paths.source).size,
+    },
+  })}\n`);
+
+  assert.throws(
+    () => burnImage.validateStockDiagnosticBoot(
+      paths.source,
+      paths.output,
+      paths.initramfs,
+      config,
+    ),
+    /exceeds the stock ramdisk size/,
   );
 });
 
@@ -225,6 +240,17 @@ test('repository diagnostic inputs are byte-exact stock B860 payloads', () => {
     logoSha256: '2fa846726b8cbfac807698335c46377bb25d2199ebdae6606b795674b38d6335',
     logoSize: 9195984,
     busyboxCommit: '1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4',
-    dropbearCommit: '155639d40113a8ffc61aff3078e49f6e20090481',
   });
+});
+
+test('repository stock diagnostic runtime excludes Dropbear and starts HTTP', () => {
+  const init = fs.readFileSync(new URL('../config/stock-diagnostic-init', import.meta.url), 'utf8');
+  const builder = fs.readFileSync(
+    new URL('../scripts/build-stock-diagnostic-initramfs.sh', import.meta.url),
+    'utf8',
+  );
+
+  assert.match(init, /httpd -p 80 -h \/www/);
+  assert.doesNotMatch(init, /dropbear|SSH/iu);
+  assert.doesNotMatch(builder, /dropbear/iu);
 });

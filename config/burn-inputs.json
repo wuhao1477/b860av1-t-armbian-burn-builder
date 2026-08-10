@@ -16,10 +16,6 @@
     "busybox": {
       "repository": "https://github.com/mirror/busybox.git",
       "commit": "1a64f6a20aaf6ea4dbba68bbfa8cc1ab7e5c57c4"
-    },
-    "dropbear": {
-      "repository": "https://github.com/mkj/dropbear.git",
-      "commit": "155639d40113a8ffc61aff3078e49f6e20090481"
     }
   },
   "files": {

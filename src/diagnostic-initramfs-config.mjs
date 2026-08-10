@@ -36,25 +36,10 @@ function enabledOptions(source) {
   );
 }
 
-function macroValue(source, name) {
-  const match = source.match(new RegExp(`^#define\\s+${name}\\s+([01])$`, 'mu'));
-  if (!match) throw new Error(`Dropbear configuration is missing ${name}`);
-  return match[1] === '1';
-}
-
-export function validateDiagnosticBuildConfiguration(busyboxSource, dropbearSource) {
+export function validateDiagnosticBuildConfiguration(busyboxSource) {
   const enabled = enabledOptions(busyboxSource);
   for (const name of REQUIRED_BUSYBOX_OPTIONS) {
     if (!enabled.has(name)) throw new Error(`BusyBox configuration is missing CONFIG_${name}=y`);
   }
-  const passwordAuthentication = macroValue(
-    dropbearSource,
-    'DROPBEAR_SVR_PASSWORD_AUTH',
-  );
-  const pamAuthentication = macroValue(dropbearSource, 'DROPBEAR_SVR_PAM_AUTH');
-  const publicKeyAuthentication = macroValue(dropbearSource, 'DROPBEAR_SVR_PUBKEY_AUTH');
-  if (passwordAuthentication || pamAuthentication || !publicKeyAuthentication) {
-    throw new Error('Dropbear must use public-key-only server authentication');
-  }
-  return { passwordAuthentication, publicKeyAuthentication };
+  return { remoteAccess: 'http-only' };
 }

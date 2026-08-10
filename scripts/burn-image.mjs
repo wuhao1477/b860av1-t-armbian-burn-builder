@@ -364,11 +364,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     args[2],
     mergeBusyboxConfig(fs.readFileSync(args[0], 'utf8'), fs.readFileSync(args[1], 'utf8')),
   );
-  else if (command === 'check-diagnostic-build-config' && args.length === 2) console.log(JSON.stringify(
-    validateDiagnosticBuildConfiguration(
-      fs.readFileSync(args[0], 'utf8'),
-      fs.readFileSync(args[1], 'utf8'),
-    ),
+  else if (command === 'check-diagnostic-build-config' && args.length === 1) console.log(JSON.stringify(
+    validateDiagnosticBuildConfiguration(fs.readFileSync(args[0], 'utf8')),
   ));
   else if (command === 'sparse-ext4-uuid' && args.length === 1) console.log(readSparseExt4Uuid(args[0]));
   else if (command === 'check-sparse-capacity' && args.length === 4) console.log(JSON.stringify(
@@ -410,5 +407,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     replaceLinuxTargetDtb(...args),
   ));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-bootloader bootloader config | check-stock-boot boot [root-uuid] | check-stock-diagnostic-boot stock candidate initramfs config | merge-busybox-config baseline fragment output | check-diagnostic-build-config busybox dropbear | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-bootloader bootloader config | check-stock-boot boot [root-uuid] | check-stock-diagnostic-boot stock candidate initramfs config | merge-busybox-config baseline fragment output | check-diagnostic-build-config busybox | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }
