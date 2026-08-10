@@ -3,6 +3,8 @@ set -Eeuo pipefail
 
 [[ $# -eq 1 ]] || { echo "usage: $0 output-dir" >&2; exit 2; }
 out=$1
+mkdir -p "$out"
+out=$(cd -- "$out" && pwd -P)
 root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 tmp=$(mktemp -d)
 cleanup() { rm -rf "$tmp"; }
@@ -12,7 +14,6 @@ for command in aarch64-linux-gnu-gcc cpio git gzip make node qemu-aarch64-static
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
-mkdir -p "$out"
 mapfile -t sources < <(node -e '
   const config = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));
   for (const name of ["busybox", "dropbear"]) {
