@@ -321,7 +321,7 @@ jobs:
             out/SHA256SUMS
             out/RELEASE.md
           )
-          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --prerelease \
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
             --title "$tag" --notes-file out/RELEASE.md
           for asset in "${assets[@]}"; do
             gh release upload "$tag" "$asset" --repo "$GITHUB_REPOSITORY"

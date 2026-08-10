@@ -371,6 +371,7 @@ test('burn workflow follows the public raw release and publishes direct-boot con
 
 test('burn workflow builds the stock-kernel diagnostic only on a manually selected branch', () => {
   const workflow = read('.github/workflows/weekly-burn-build.yml');
+  const diagnosticPublish = workflow.match(/stock_diagnostic_publish:[\s\S]+$/)?.[0];
 
   assert.match(workflow, /detect:\s*\n\s*if:\s*.*default_branch/);
   assert.match(
@@ -392,4 +393,6 @@ test('burn workflow builds the stock-kernel diagnostic only on a manually select
   }
   assert.match(workflow, /Purpose: stock-kernel diagnostic/);
   assert.match(workflow, /Status: format-valid \/ diagnostic \/ hardware-unverified/);
+  assert.ok(diagnosticPublish, 'missing diagnostic publication job');
+  assert.match(diagnosticPublish, /gh release create[^\n]+--target\s+"\$GITHUB_SHA"/);
 });
