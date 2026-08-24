@@ -8,6 +8,13 @@ const AML_MULTI_DTB_MAGIC = 'AML_';
 const ARM64_ELF_MACHINE = 0xb7;
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
 const DIAGNOSTIC_MARKER = 'B860_STOCK_KERNEL_DIAGNOSTIC=1';
+const CMDLINE_OFFSET = 64;
+const CMDLINE_BYTES = 512;
+// 原厂 storeargs 会在 bootargs 末尾追加 quiet，把 console_loglevel 压到 4，并且
+// initargs 只带 console=ttyS0。没有串口时内核的失败信息无处可看，屏幕上始终是
+// U-Boot 画的那张 logo。追加 console=tty0 让 fbcon 把日志打到 HDMI，
+// ignore_loglevel 覆盖 quiet。两项都排在最后，追加语义下同样生效。
+const CONSOLE_ARGUMENTS = ['console=tty0', 'ignore_loglevel'];
 
 function fail(message) {
   throw new Error(message);
@@ -63,11 +70,89 @@ function bootId(parts) {
   return hash.digest();
 }
 
-function normalizedHeader(header) {
+function normalizedHeader(header, consoleCmdline) {
   const normalized = Buffer.from(header);
   normalized.fill(0, 16, 20);
   normalized.fill(0, 576, 608);
+  // 只有 verbose 变体会写 cmdline 字段；默认变体仍要求它逐字节不变。
+  if (consoleCmdline !== undefined) {
+    normalized.fill(0, CMDLINE_OFFSET, CMDLINE_OFFSET + CMDLINE_BYTES);
+  }
   return normalized;
+}
+
+function readCmdline(header) {
+  const field = header.subarray(CMDLINE_OFFSET, CMDLINE_OFFSET + CMDLINE_BYTES);
+  const nul = field.indexOf(0);
+  return field.subarray(0, nul < 0 ? field.length : nul).toString('ascii');
+}
+
+function writeCmdline(header, cmdline) {
+  const encoded = Buffer.from(cmdline, 'ascii');
+  if (encoded.length !== cmdline.length || !/^[\x20-\x7e]+$/u.test(cmdline)) {
+    fail('diagnostic console command line must be printable ASCII');
+  }
+  // 末位必须留出 NUL，原厂 U-Boot 按 C 字符串读这个字段。
+  if (encoded.length >= CMDLINE_BYTES) {
+    fail(`diagnostic console command line exceeds ${CMDLINE_BYTES - 1} bytes`);
+  }
+  header.fill(0, CMDLINE_OFFSET, CMDLINE_OFFSET + CMDLINE_BYTES);
+  encoded.copy(header, CMDLINE_OFFSET);
+}
+
+export function parseStockEnvironment(configPath) {
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  if (!/^[0-9a-f]{64}$/u.test(config.source?.bl33Sha256)
+      || !Number.isSafeInteger(config.source?.variableCount)) {
+    fail('stock environment contract is invalid');
+  }
+  const entries = new Map();
+  for (const chunk of Buffer.from(config.dataBase64, 'base64').toString('latin1').split('\0')) {
+    if (chunk === '') continue;
+    const separator = chunk.indexOf('=');
+    if (separator <= 0) fail('stock environment entry is malformed');
+    entries.set(chunk.slice(0, separator), chunk.slice(separator + 1));
+  }
+  if (entries.size !== config.source.variableCount) {
+    fail('stock environment variable count differs from its contract');
+  }
+  return entries;
+}
+
+function requireVariable(environment, name) {
+  const value = environment.get(name);
+  if (typeof value !== 'string' || value === '') {
+    fail(`stock environment lacks ${name}`);
+  }
+  if (value.includes('$')) fail(`stock environment ${name} is not fully expanded`);
+  return value;
+}
+
+/**
+ * 用原厂快照里的变量重建一条完整的、自足的内核 cmdline。
+ * 之所以要“完整”而不是只写增量：原厂 U-Boot 对 Android boot 头 cmdline 的处理
+ * 在不同 Amlogic 分支里有 append 和 replace 两种语义，而 BL33 是加密的、无法静态
+ * 确认是哪一种。写完整的一条在两种语义下都正确 —— replace 时它独立成立，
+ * append 时重复键无害（多个 console= 本就是叠加，靠后的 ignore_loglevel 覆盖 quiet）。
+ */
+export function diagnosticConsoleCmdline(stockEnvironmentPath) {
+  const environment = parseStockEnvironment(stockEnvironmentPath);
+  const outputMode = requireVariable(environment, 'outputmode');
+  const cmdline = [
+    requireVariable(environment, 'initargs'),
+    `logo=${requireVariable(environment, 'display_layer')},loaded,${requireVariable(environment, 'fb_addr')},${outputMode}`,
+    `vout=${outputMode},enable`,
+    `hdmimode=${requireVariable(environment, 'hdmimode')}`,
+    `cvbsmode=${requireVariable(environment, 'cvbsmode')}`,
+    ...CONSOLE_ARGUMENTS,
+  ].join(' ');
+  for (const argument of CONSOLE_ARGUMENTS) {
+    if (!cmdline.endsWith(argument) && !cmdline.includes(`${argument} `)) {
+      fail(`diagnostic console command line lost ${argument}`);
+    }
+  }
+  if (/\bquiet\b/u.test(cmdline)) fail('diagnostic console command line must not carry quiet');
+  return cmdline;
 }
 
 function kernelVersion(kernel) {
@@ -217,7 +302,7 @@ export function validateStockDiagnosticInputs(boardInputs, configPath) {
   };
 }
 
-export function replaceAndroidBootRamdisk(sourcePath, initramfsPath, outputPath) {
+export function replaceAndroidBootRamdisk(sourcePath, initramfsPath, outputPath, consoleCmdline) {
   validateDiagnosticInitramfs(initramfsPath);
   const source = parseAndroidBoot(fs.readFileSync(sourcePath), 'stock boot');
   if (source.second.toString('ascii', 0, 4) !== AML_MULTI_DTB_MAGIC) {
@@ -226,6 +311,12 @@ export function replaceAndroidBootRamdisk(sourcePath, initramfsPath, outputPath)
   const ramdisk = fs.readFileSync(initramfsPath);
   const header = Buffer.from(source.header);
   header.writeUInt32LE(ramdisk.length, 16);
+  if (consoleCmdline !== undefined) {
+    if (readCmdline(source.header) !== '') {
+      fail('stock boot already carries a command line; refusing to overwrite it');
+    }
+    writeCmdline(header, consoleCmdline);
+  }
   header.fill(0, 576, 608);
   bootId([source.kernel, ramdisk, source.second]).copy(header, 576);
   const output = Buffer.concat([
@@ -237,6 +328,7 @@ export function replaceAndroidBootRamdisk(sourcePath, initramfsPath, outputPath)
   return {
     size: output.length, kernelSha256: sha256(source.kernel),
     ramdiskSha256: sha256(ramdisk), secondSha256: sha256(source.second),
+    consoleCmdline: consoleCmdline ?? null,
   };
 }
 
@@ -251,7 +343,9 @@ function validateSourceContract(sourceImage, sourcePath, config) {
   return parseAndroidBoot(sourceImage, sourcePath);
 }
 
-export function validateStockDiagnosticBoot(sourcePath, candidatePath, initramfsPath, configPath) {
+export function validateStockDiagnosticBoot(
+  sourcePath, candidatePath, initramfsPath, configPath, consoleCmdline,
+) {
   const sourceImage = fs.readFileSync(sourcePath);
   const candidateImage = fs.readFileSync(candidatePath);
   const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
@@ -265,11 +359,19 @@ export function validateStockDiagnosticBoot(sourcePath, candidatePath, initramfs
   if (candidate.ramdisk.length > source.ramdisk.length) {
     fail('diagnostic boot ramdisk exceeds the stock ramdisk size');
   }
-  if (!normalizedHeader(source.header).equals(normalizedHeader(candidate.header))) {
+  if (consoleCmdline !== undefined) {
+    // 默认变体逐字节保留 cmdline 字段；verbose 变体只允许在原厂为空时写入。
+    if (readCmdline(source.header) !== '') fail('stock boot command line is not empty');
+    if (readCmdline(candidate.header) !== consoleCmdline) {
+      fail('diagnostic boot command line differs from its contract');
+    }
+  }
+  if (!normalizedHeader(source.header, consoleCmdline)
+    .equals(normalizedHeader(candidate.header, consoleCmdline))) {
     fail('diagnostic boot changed a protected header field');
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     sourceBootSha256: sha256(sourceImage),
     candidateBootSha256: sha256(candidateImage),
     kernelSha256: sha256(source.kernel),
@@ -280,6 +382,7 @@ export function validateStockDiagnosticBoot(sourcePath, candidatePath, initramfs
     ramdiskHeadroom: source.ramdisk.length - candidate.ramdisk.length,
     secondSha256: sha256(source.second),
     kernelVersion: kernelVersion(source.kernel),
-    onlyRamdiskChanged: true,
+    consoleCmdline: consoleCmdline ?? null,
+    onlyRamdiskChanged: consoleCmdline === undefined,
   };
 }

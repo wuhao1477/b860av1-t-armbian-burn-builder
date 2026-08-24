@@ -1,6 +1,16 @@
 {
   "board": "ZXV10 B860AV1.1-T",
-  "soc": "Amlogic S905L / P212",
+  "soc": "Amlogic S905M-B",
+  "socFamily": "meson-gxl",
+  "socEvidence": {
+    "packageMarking": "amlogic S905M-B QUAD-CORE J-T0VF79.00",
+    "source": "operator photograph of the board silkscreen",
+    "bootloaderBuildTag": "gxl g1614c0b - xiaobo.gu@droid05",
+    "platformId": "0x0811",
+    "vendorDtbTargets": "gxb_p200 / gxl_p211 / gxl_p215",
+    "storage": "eMMC (vendor DTB /nand disabled, /emmc okay)",
+    "ophubProfile": "s905mb"
+  },
   "status": "hardware-unverified",
   "stockBoot": {
     "file": "stock-boot.PARTITION",

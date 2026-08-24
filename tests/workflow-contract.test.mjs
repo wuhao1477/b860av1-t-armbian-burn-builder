@@ -345,12 +345,12 @@ test('burn workflow follows the public raw release and publishes direct-boot con
   );
   assert.match(workflow, /sha256sum --check/);
   assert.match(workflow, /gh release download/);
-  assert.match(workflow, /validate-candidate-artifacts\.mjs/);
   assert.match(workflow, /recipe_digest/);
   for (const recipeInput of [
     'board-overlays/burn-partitions.dtso',
     'config/burn-tooling.json',
     'board-inputs/meson1.dtb',
+    'scripts/build-board-dtb.sh',
     'src/burn-dtb-roles.mjs',
     'src/burn-standalone-dtb.mjs',
     'src/direct-boot-contract.mjs',
@@ -358,8 +358,18 @@ test('burn workflow follows the public raw release and publishes direct-boot con
   ]) {
     assert.match(workflow, new RegExp(recipeInput.replaceAll('.', '\\.')));
   }
-  assert.match(workflow, /SOURCE_REPOSITORY:\s*wuhao1477\/b860av1-t-armbian-builder/);
+  // 料源为 ophub 的 s905lb-r3300l 成品镜像：S905M-B 在 ophub 设备库中与
+  // s905lb 共用 meson-gxl-s905x-p212.dtb 和 u-boot-r3300l.bin，而 ophub
+  // 并不单独发布 s905mb 资产。
+  assert.match(workflow, /SOURCE_REPOSITORY:\s*ophub\/amlogic-s9xxx-armbian/);
+  assert.match(workflow, /SOURCE_BOARD:\s*s905lb-r3300l/);
+  assert.match(workflow, /SOURCE_SUITE:\s*trixie/);
   assert.match(workflow, /gh release download "\$PUBLIC_RELEASE" --repo "\$SOURCE_REPOSITORY"/);
+  // ophub 的单个 release 带 200+ 个板型资产，整包下载会撑爆 runner 磁盘。
+  assert.match(workflow, /--pattern "\$NAME"/);
+  assert.doesNotMatch(workflow, /gh release download "\$PUBLIC_RELEASE" --repo "\$SOURCE_REPOSITORY" --dir/);
+  // 发布标签必须同时暴露 Armbian 版本、Debian 代号和内核版本。
+  assert.match(workflow, /tag="b860-burn-armbian-\$\{BASH_REMATCH\[1\]\}-\$\{BASH_REMATCH\[2\]\}-k\$\{BASH_REMATCH\[3\]\}/);
   assert.match(workflow, /gh release create[^\n]+--draft/);
   assert.match(workflow, /draft_release_ready\(\)[\s\S]+release_ready=false[\s\S]+for attempt in 1 2 3 4 5[\s\S]+release_ready=true/);
   assert.match(workflow, /gh release upload/);
@@ -399,4 +409,25 @@ test('burn workflow builds the stock-kernel diagnostic only on a manually select
   assert.doesNotMatch(diagnosticJobs, /Dropbear|SSH user|SSH key fingerprint/);
   assert.ok(diagnosticPublish, 'missing diagnostic publication job');
   assert.match(diagnosticPublish, /gh release create[^\n]+--target\s+"\$GITHUB_SHA"/);
+});
+
+test('burn workflow gates the HDMI console variant behind an explicit dispatch input', () => {
+  const workflow = read('.github/workflows/weekly-burn-build.yml');
+  const build = workflow.match(/stock_diagnostic_build:[\s\S]+?\n  stock_diagnostic_publish:/)?.[0];
+  const buildScript = read('scripts/build-stock-diagnostic-burn.sh');
+  const validateScript = read('scripts/validate-stock-diagnostic-burn.sh');
+
+  assert.match(workflow, /diagnostic_console:\s*\n\s*description:[\s\S]+?default: false/);
+  assert.ok(build, 'missing diagnostic build job');
+  // 构建与独立验证必须落在同一个 job 里，才能共享同一个开关取值。
+  assert.match(build, /B860_DIAGNOSTIC_CONSOLE: \$\{\{ inputs\.diagnostic_console && 1 \|\| 0 \}\}/);
+  assert.match(build, /build-stock-diagnostic-burn\.sh/);
+  assert.match(build, /validate-stock-diagnostic-burn\.sh/);
+  for (const script of [buildScript, validateScript]) {
+    assert.match(script, /B860_DIAGNOSTIC_CONSOLE:-0/);
+    assert.match(script, /diagnostic-console-cmdline/);
+    assert.match(script, /config\/stock-environment\.json/);
+  }
+  // 验证侧只能自己重新推导，不得从发布的契约里读回 cmdline。
+  assert.doesNotMatch(validateScript, /consoleCmdline/);
 });

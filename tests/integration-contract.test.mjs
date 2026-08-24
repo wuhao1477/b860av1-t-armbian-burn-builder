@@ -170,7 +170,13 @@ test('burn builder creates a stock-compatible Android boot v0 package', () => {
   const builder = read('scripts/build-burn-image.sh');
   const validator = read('scripts/validate-burn-image.sh');
   assert.match(builder, /board_dtb=.*config\/board\.json/);
-  assert.match(builder, /select-dtb \"\$board_dtb\"/);
+  // 目标 DTB 从固定提交的 P212 修复源码现场编译，不从上游成品镜像里挑选：
+  // ophub 镜像只带主线布局的通用 p212 DTB，缺少原厂 BL33 需要的
+  // apb@d0000000 路径与 /partitions 契约。
+  assert.match(builder, /build-board-dtb\.sh/);
+  assert.doesNotMatch(builder, /select-dtb/);
+  assert.doesNotMatch(builder, /dtb_candidates/);
+  assert.match(builder, /source-built-dtb\.json/);
   assert.match(builder, /blkid --match-tag UUID --output value \"\$root_part\"/);
   assert.match(validator, /sparse-ext4-uuid/);
   for (const payload of ['boot.PARTITION', 'data.PARTITION', 'meson1.dtb']) {

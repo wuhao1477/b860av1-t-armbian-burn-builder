@@ -36,17 +36,27 @@ sudo mount -o rw "$root_part" "$root_mount"
 board_dtb=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$root/config/board.json')).dtb)")
 mapfile -t kernel_candidates < <(find "$boot_mount" -type f \( -name Image.gz -o -name Image -o -name zImage \) | sort)
 mapfile -t initrd_candidates < <(find "$boot_mount" -type f -name 'initrd.img-*' | sort)
-mapfile -t dtb_candidates < <(find "$boot_mount" -type f -name "$board_dtb" | sort)
 kernel=$(node "$root/scripts/burn-image.mjs" select-kernel "${kernel_candidates[@]}")
 initrd=$(node "$root/scripts/burn-image.mjs" select-initrd "${initrd_candidates[@]}")
-dtb=$(node "$root/scripts/burn-image.mjs" select-dtb "$board_dtb" "${dtb_candidates[@]}")
-[[ -n "$kernel" && -n "$initrd" && -n "$dtb" ]] || {
-  echo 'boot partition lacks the active B860 kernel, raw initrd, or P212 DTB' >&2
+[[ -n "$kernel" && -n "$initrd" ]] || {
+  echo 'boot partition lacks the active B860 kernel or raw initrd' >&2
   exit 1
 }
+# 上游 ophub 成品镜像只带通用 meson-gxl-s905x-p212.dtb，其节点布局按主线
+# meson-gxl.dtsi 生成，与原厂 BL33 期望的 apb@d0000000 路径和 /partitions
+# 契约不一致。B860 目标 DTB 一律从固定提交的 P212 修复源码现场编译，
+# 由 build-board-dtb.sh 校验 p212 compatible、RTL8189FTV、SDIO 200 MHz、
+# reset GPIO 与 64 MiB CMA，不从料源镜像中挑选。
+dtb_manifest="$tmp/dtb-manifest.json"
+node -e '
+  const fs = require("node:fs");
+  const board = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  fs.writeFileSync(process.argv[2], `${JSON.stringify({ schemaVersion: 5, board }, null, 2)}\n`);
+' "$root/config/board.json" "$dtb_manifest"
+"$root/scripts/build-board-dtb.sh" "$dtb_manifest" "$out"
 node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/kernel" >/dev/null
 cp -- "$initrd" "$tmp/initrd"
-cp -- "$dtb" "$tmp/linux.source.dtb"
+cp -- "$out/$board_dtb" "$tmp/linux.source.dtb"
 node "$root/scripts/burn-image.mjs" standalone-dtb \
   "$tmp/linux.source.dtb" "$root/board-overlays/burn-partitions.dtso" \
   "$tmp/linux.dtb" >/dev/null
@@ -135,4 +145,4 @@ node "$root/scripts/burn-image.mjs" report "$out/burn.img" "$raw" \
   "$out/boot-contract.json" "$out/dtb-contract.json" "$out/rootfs-contract.json" \
   > "$out/burn-report.json"
 (cd "$out" && sha256sum burn.img stock-bootloader-contract.json boot-contract.json \
-  dtb-contract.json rootfs-contract.json burn-report.json > SHA256SUMS)
+  dtb-contract.json rootfs-contract.json burn-report.json source-built-dtb.json > SHA256SUMS)

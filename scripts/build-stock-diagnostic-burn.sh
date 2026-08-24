@@ -29,11 +29,20 @@ done
 node "$root/scripts/burn-image.mjs" check-stock-bootloader \
   "$package/bootloader.PARTITION" "$root/config/burn-inputs.json" \
   > "$out/stock-bootloader-contract.json"
+# B860_DIAGNOSTIC_CONSOLE=1 时向 Android boot 头的 cmdline 字段写入完整 cmdline，
+# 让内核日志同时打到 HDMI(tty0)，供无串口场景拍屏取证。默认变体不写该字段。
+# 写入值记录在 diagnostic-boot-contract.json 的 consoleCmdline 里，无需单独产物。
+console_cmdline=()
+if [[ "${B860_DIAGNOSTIC_CONSOLE:-0}" == 1 ]]; then
+  console_cmdline+=("$(node "$root/scripts/burn-image.mjs" diagnostic-console-cmdline \
+    "$root/config/stock-environment.json")")
+fi
 node "$root/scripts/burn-image.mjs" replace-stock-ramdisk \
-  "$root/board-inputs/stock-boot.PARTITION" "$initramfs" "$package/boot.PARTITION" >/dev/null
+  "$root/board-inputs/stock-boot.PARTITION" "$initramfs" "$package/boot.PARTITION" \
+  "${console_cmdline[@]}" >/dev/null
 node "$root/scripts/burn-image.mjs" check-stock-diagnostic-boot \
   "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
-  "$initramfs" "$root/config/burn-inputs.json" \
+  "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
   > "$out/diagnostic-boot-contract.json"
 
 ampack="$tmp/ampack-src"

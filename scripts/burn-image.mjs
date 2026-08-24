@@ -17,6 +17,8 @@ import {
   validateDiagnosticBuildConfiguration,
 } from '../src/diagnostic-initramfs-config.mjs';
 import {
+  diagnosticConsoleCmdline,
+  parseStockEnvironment,
   replaceAndroidBootRamdisk,
   validateDiagnosticInitramfs,
   validateStockDiagnosticInputs,
@@ -40,6 +42,8 @@ export {
   validateDiagnosticBuildConfiguration,
 } from '../src/diagnostic-initramfs-config.mjs';
 export {
+  diagnosticConsoleCmdline,
+  parseStockEnvironment,
   replaceAndroidBootRamdisk,
   validateDiagnosticInitramfs,
   validateStockDiagnosticInputs,
@@ -348,16 +352,19 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     validateStockBootloader(...args),
   ));
   else if (command === 'check-stock-boot' && (args.length === 1 || args.length === 2)) console.log(JSON.stringify(validateStockBoot(...args)));
-  else if (command === 'replace-stock-ramdisk' && args.length === 3) console.log(JSON.stringify(
+  else if (command === 'replace-stock-ramdisk' && (args.length === 3 || args.length === 4)) console.log(JSON.stringify(
     replaceAndroidBootRamdisk(...args),
   ));
+  else if (command === 'diagnostic-console-cmdline' && args.length === 1) console.log(
+    diagnosticConsoleCmdline(args[0]),
+  );
   else if (command === 'check-diagnostic-initramfs' && args.length === 1) console.log(JSON.stringify(
     validateDiagnosticInitramfs(...args),
   ));
   else if (command === 'check-stock-diagnostic-inputs' && args.length === 2) console.log(JSON.stringify(
     validateStockDiagnosticInputs(...args),
   ));
-  else if (command === 'check-stock-diagnostic-boot' && args.length === 4) console.log(JSON.stringify(
+  else if (command === 'check-stock-diagnostic-boot' && (args.length === 4 || args.length === 5)) console.log(JSON.stringify(
     validateStockDiagnosticBoot(...args),
   ));
   else if (command === 'merge-busybox-config' && args.length === 3) fs.writeFileSync(
@@ -407,5 +414,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     replaceLinuxTargetDtb(...args),
   ));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-bootloader bootloader config | check-stock-boot boot [root-uuid] | check-stock-diagnostic-boot stock candidate initramfs config | merge-busybox-config baseline fragment output | check-diagnostic-build-config busybox | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-bootloader bootloader config | check-stock-boot boot [root-uuid] | replace-stock-ramdisk stock initramfs output [console-cmdline] | diagnostic-console-cmdline stock-environment | check-stock-diagnostic-boot stock candidate initramfs config [console-cmdline] | merge-busybox-config baseline fragment output | check-diagnostic-build-config busybox | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

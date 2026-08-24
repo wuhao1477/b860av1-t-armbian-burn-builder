@@ -10,12 +10,22 @@ on:
         required: false
         type: boolean
         default: false
+      diagnostic_console:
+        description: Diagnostic only: log the stock kernel to HDMI (tty0) as well as serial
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
 env:
-  SOURCE_REPOSITORY: wuhao1477/b860av1-t-armbian-builder
+  SOURCE_REPOSITORY: ophub/amlogic-s9xxx-armbian
+  # ophub 未发布 s905mb 资产；s905mb 与 s905lb 在 ophub 设备库中共用
+  # meson-gxl-s905x-p212.dtb 与 u-boot-r3300l.bin，故 S905M-B 取 s905lb-r3300l。
+  SOURCE_BOARD: s905lb-r3300l
+  SOURCE_SUITE: trixie
+  SOURCE_KERNEL_SERIES: '6.12'
 
 concurrency:
   group: b860-burn-weekly
@@ -40,10 +50,16 @@ jobs:
           FORCE: ${{ inputs.force || false }}
         run: |
           set -Eeuo pipefail
-          current=$(gh api "repos/$SOURCE_REPOSITORY/releases" --paginate --jq '[.[] | select(.draft == false and (.tag_name | startswith("armbian-")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]')
+          tag_prefix="Armbian_${SOURCE_SUITE}_arm64_server_"
+          asset_pattern="^Armbian_.*_amlogic_${SOURCE_BOARD}_${SOURCE_SUITE}_${SOURCE_KERNEL_SERIES//./\\.}\\.[0-9]+_server_.*\\.img\\.gz$"
+          current=$(gh api "repos/$SOURCE_REPOSITORY/releases" --paginate --jq \
+            "[.[] | select(.draft == false and (.tag_name | startswith(\"$tag_prefix\")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]")
+          [[ -n "$current" && "$current" != null ]] || { echo "no ophub release matches $tag_prefix" >&2; exit 1; }
           release_tag=$(jq -r '.tag_name' <<<"$current")
-          asset=$(jq -c '[.assets[] | select(.name | test("^Armbian_.*\\.img\\.gz$"))] | .[0]' <<<"$current")
-          [[ "$asset" != null ]] || { echo 'latest public B860 release has no raw image' >&2; exit 1; }
+          # 同一 release 内可能并存多个补丁版内核，按资产名倒序取最高的 6.12.x
+          asset=$(jq -c --arg pattern "$asset_pattern" \
+            '[.assets[] | select(.name | test($pattern))] | sort_by(.name) | reverse | .[0]' <<<"$current")
+          [[ "$asset" != null ]] || { echo "ophub release $release_tag has no $SOURCE_BOARD $SOURCE_KERNEL_SERIES image" >&2; exit 1; }
           asset_name=$(jq -r '.name' <<<"$asset")
           asset_url=$(jq -r '.browser_download_url' <<<"$asset")
           asset_digest=$(jq -r '.digest' <<<"$asset" | sed 's/^sha256://')
@@ -55,6 +71,7 @@ jobs:
             board-inputs/meson1.dtb board-overlays/burn-partitions.dtso \
             config/board.json config/burn-inputs.json config/burn-tooling.json \
             scripts/build-burn-image.sh scripts/burn-image.mjs \
+            scripts/build-board-dtb.sh scripts/validate-dtb-compatible.mjs \
             scripts/validate-burn-image.sh src/android-sparse.mjs src/burn-report.mjs \
             src/burn-dtb-roles.mjs src/burn-standalone-dtb.mjs \
             src/direct-boot-contract.mjs src/emmc-boot-chain.mjs \
@@ -91,7 +108,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           toolchain: stable
-      - name: Download and validate public Armbian release
+      - name: Download and validate ophub Armbian release
         env:
           GH_TOKEN: ${{ github.token }}
           DIGEST: ${{ needs.detect.outputs.asset_digest }}
@@ -100,10 +117,12 @@ jobs:
         run: |
           set -Eeuo pipefail
           mkdir source-assets
-          gh release download "$PUBLIC_RELEASE" --repo "$SOURCE_REPOSITORY" --dir source-assets
+          # ophub 的 release 含 200+ 个板型资产，必须按名下载单个文件
+          gh release download "$PUBLIC_RELEASE" --repo "$SOURCE_REPOSITORY" \
+            --pattern "$NAME" --dir source-assets
+          [[ -f "source-assets/$NAME" ]] || { echo "ophub asset was not downloaded: $NAME" >&2; exit 1; }
           printf '%s  %s\n' "$DIGEST" "source-assets/$NAME" | sha256sum --check --status
-          manifest_fingerprint=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).fingerprint)' source-assets/resolved-sources.json)
-          node scripts/validate-candidate-artifacts.mjs source-assets "$manifest_fingerprint"
+          gzip -t "source-assets/$NAME"
       - name: Build Amlogic v2 burn image
         run: scripts/build-burn-image.sh "source-assets/${{ needs.detect.outputs.asset_name }}" out
       - name: Independently validate container
@@ -120,11 +139,19 @@ jobs:
         env:
           INPUT_FINGERPRINT: ${{ needs.detect.outputs.fingerprint }}
           PUBLIC_RELEASE: ${{ needs.detect.outputs.release_tag }}
+          ASSET_NAME: ${{ needs.detect.outputs.asset_name }}
         run: |
           set -Eeuo pipefail
-          printf 'Input fingerprint: %s\nPublic release: %s\nStatus: format-valid / hardware-unverified\n' \
-            "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" > out/RELEASE.md
-          (cd out && sha256sum burn.img burn.img.xz stock-bootloader-contract.json boot-contract.json dtb-contract.json rootfs-contract.json burn-report.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
+          {
+            printf 'Board: ZTE ZXV10 B860AV1.1-T (Amlogic S905M-B, meson-gxl, eMMC)\n'
+            printf 'Upstream: %s / %s\n' "$SOURCE_REPOSITORY" "$PUBLIC_RELEASE"
+            printf 'Upstream asset: %s\n' "$ASSET_NAME"
+            printf 'Boot chain: stock signed BL2/BL30/BL301/BL31/BL33 -> Android boot v0 -> Armbian kernel\n'
+            printf 'Input fingerprint: %s\n' "$INPUT_FINGERPRINT"
+            printf 'Status: format-valid / hardware-unverified\n'
+            printf 'The stock bootloader is preserved byte-for-byte; only boot and data payloads are rewritten.\n'
+          } > out/RELEASE.md
+          (cd out && sha256sum burn.img burn.img.xz stock-bootloader-contract.json boot-contract.json dtb-contract.json rootfs-contract.json burn-report.json source-built-dtb.json device-tree-source.dts RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: b860-burn-output
@@ -137,6 +164,8 @@ jobs:
             out/dtb-contract.json
             out/rootfs-contract.json
             out/burn-report.json
+            out/source-built-dtb.json
+            out/device-tree-source.dts
             out/RELEASE.md
           retention-days: 1
 
@@ -155,12 +184,19 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           PUBLIC_RELEASE: ${{ needs.detect.outputs.release_tag }}
+          ASSET_NAME: ${{ needs.detect.outputs.asset_name }}
           RUN_NUMBER: ${{ github.run_number }}
           RUN_ATTEMPT: ${{ github.run_attempt }}
           FINGERPRINT: ${{ needs.detect.outputs.fingerprint }}
         run: |
           set -Eeuo pipefail
-          tag="b860-burn-${PUBLIC_RELEASE#Armbian_}-build-${RUN_NUMBER}.${RUN_ATTEMPT}"
+          # ophub 的 release tag 只含代号和月份，Armbian 与内核版本都在资产名里。
+          # 形如 Armbian_26.08.0_amlogic_s905lb-r3300l_trixie_6.12.100_server_2026.08.01.img.gz
+          [[ "$ASSET_NAME" =~ ^Armbian_([0-9][^_]*)_amlogic_[^_]+_([a-z]+)_([0-9]+\.[0-9]+\.[0-9]+)_ ]] || {
+            echo "cannot derive a version tag from the ophub asset name: $ASSET_NAME" >&2
+            exit 1
+          }
+          tag="b860-burn-armbian-${BASH_REMATCH[1]}-${BASH_REMATCH[2]}-k${BASH_REMATCH[3]}-build-${RUN_NUMBER}.${RUN_ATTEMPT}"
           assets=(
             out/burn.img
             out/burn.img.xz
@@ -170,6 +206,8 @@ jobs:
             out/dtb-contract.json
             out/rootfs-contract.json
             out/burn-report.json
+            out/source-built-dtb.json
+            out/device-tree-source.dts
             out/RELEASE.md
           )
           draft_release_ready() {
@@ -232,6 +270,8 @@ jobs:
     if: ${{ github.event_name == 'workflow_dispatch' && github.ref_name != github.event.repository.default_branch }}
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    env:
+      B860_DIAGNOSTIC_CONSOLE: ${{ inputs.diagnostic_console && 1 || 0 }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
@@ -271,6 +311,14 @@ jobs:
             echo 'DHCP hostname: b860-diag; HTTP status path: /index.txt.'
             echo 'DHCP fallback: 169.254.86.10/16; HTTP status port: 80.'
             echo 'The stock Android splash is intentional and only proves that stock U-Boot reached preboot.'
+            if [[ "$B860_DIAGNOSTIC_CONSOLE" == 1 ]]; then
+              echo 'Console variant: the Android boot command line field carries console=tty0 and'
+              echo 'ignore_loglevel, so the stock kernel also logs to HDMI. Photograph the screen if'
+              echo 'the box stops before the LED starts blinking. See consoleCmdline in'
+              echo 'diagnostic-boot-contract.json for the exact bytes.'
+            else
+              echo 'Default variant: only the ramdisk differs from stock; the kernel logs to serial only.'
+            fi
           } > out/RELEASE.md
           (cd out && sha256sum burn.img burn.img.xz diagnostic-initramfs.cpio.gz \
             diagnostic-inputs-contract.json diagnostic-initramfs-contract.json \

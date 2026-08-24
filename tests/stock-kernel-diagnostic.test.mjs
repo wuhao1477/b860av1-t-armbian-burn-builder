@@ -254,3 +254,135 @@ test('repository stock diagnostic runtime excludes Dropbear and starts HTTP', ()
   assert.doesNotMatch(init, /dropbear|SSH/iu);
   assert.doesNotMatch(builder, /dropbear/iu);
 });
+
+function diagnosticConfig(paths) {
+  const config = path.join(paths.directory, 'diagnostic.json');
+  fs.writeFileSync(config, `${JSON.stringify({
+    schemaVersion: 1,
+    stockBoot: {
+      sha256: crypto.createHash('sha256').update(fs.readFileSync(paths.source)).digest('hex'),
+      size: fs.statSync(paths.source).size,
+    },
+  })}\n`);
+  return config;
+}
+
+function emptyCmdlineFixture(context) {
+  const paths = stockFixture(context);
+  const source = fs.readFileSync(paths.source);
+  source.fill(0, 64, 576);
+  fs.writeFileSync(paths.source, source);
+  return paths;
+}
+
+test('repository stock boot leaves the Android command line field empty', () => {
+  const stock = fs.readFileSync(new URL('board-inputs/stock-boot.PARTITION', ROOT));
+  const field = stock.subarray(64, 576);
+
+  // verbose 变体建立在“原厂没有占用该字段”之上，这个前提必须持续成立。
+  assert.deepEqual(field, Buffer.alloc(512));
+});
+
+test('repository console command line adds HDMI logging and drops quiet', () => {
+  assert.equal(typeof burnImage.diagnosticConsoleCmdline, 'function');
+  const cmdline = burnImage.diagnosticConsoleCmdline(new URL('config/stock-environment.json', ROOT));
+
+  assert.match(cmdline, /(^| )console=ttyS0,115200( |$)/u);
+  assert.match(cmdline, /(^| )console=tty0( |$)/u);
+  assert.match(cmdline, /(^| )ignore_loglevel$/u);
+  assert.match(cmdline, /(^| )init=\/init( |$)/u);
+  assert.match(cmdline, /(^| )vout=720p50hz,enable( |$)/u);
+  assert.doesNotMatch(cmdline, /\bquiet\b/u);
+  assert.doesNotMatch(cmdline, /\$/u);
+  assert.ok(cmdline.length < 512, `command line must fit the header field: ${cmdline.length}`);
+});
+
+test('repository stock environment exposes every pinned vendor variable', () => {
+  assert.equal(typeof burnImage.parseStockEnvironment, 'function');
+  const environment = burnImage.parseStockEnvironment(new URL('config/stock-environment.json', ROOT));
+
+  assert.equal(environment.size, 81);
+  assert.equal(environment.get('bootcmd'), 'run storeboot');
+  assert.equal(environment.get('outputmode'), '720p50hz');
+});
+
+test('verbose diagnostic boot writes the console command line and records it', (context) => {
+  const paths = emptyCmdlineFixture(context);
+  const cmdline = 'rootfstype=ramfs init=/init console=ttyS0,115200 console=tty0 ignore_loglevel';
+
+  const result = burnImage.replaceAndroidBootRamdisk(
+    paths.source, paths.initramfs, paths.output, cmdline,
+  );
+  const after = fs.readFileSync(paths.output);
+  const accepted = burnImage.validateStockDiagnosticBoot(
+    paths.source, paths.output, paths.initramfs, diagnosticConfig(paths), cmdline,
+  );
+
+  assert.equal(result.consoleCmdline, cmdline);
+  assert.equal(after.toString('ascii', 64, 64 + cmdline.length), cmdline);
+  assert.equal(after[64 + cmdline.length], 0);
+  assert.equal(accepted.consoleCmdline, cmdline);
+  assert.equal(accepted.onlyRamdiskChanged, false);
+  assert.equal(accepted.kernelSha256, result.kernelSha256);
+  assert.equal(accepted.secondSha256, result.secondSha256);
+});
+
+test('verbose diagnostic boot still refuses to touch the kernel or multi-DTB', (context) => {
+  const paths = emptyCmdlineFixture(context);
+  const cmdline = 'console=tty0 ignore_loglevel';
+  burnImage.replaceAndroidBootRamdisk(paths.source, paths.initramfs, paths.output, cmdline);
+  const config = diagnosticConfig(paths);
+  const tampered = fs.readFileSync(paths.output);
+  tampered[PAGE_SIZE + 4] ^= 0xff;
+  fs.writeFileSync(paths.output, tampered);
+
+  assert.throws(
+    () => burnImage.validateStockDiagnosticBoot(
+      paths.source, paths.output, paths.initramfs, config, cmdline,
+    ),
+    /stock kernel differs/,
+  );
+});
+
+test('verbose diagnostic boot validator rejects a substituted command line', (context) => {
+  const paths = emptyCmdlineFixture(context);
+  burnImage.replaceAndroidBootRamdisk(
+    paths.source, paths.initramfs, paths.output, 'console=tty0 ignore_loglevel',
+  );
+
+  assert.throws(
+    () => burnImage.validateStockDiagnosticBoot(
+      paths.source, paths.output, paths.initramfs, diagnosticConfig(paths), 'console=tty0',
+    ),
+    /command line differs from its contract/,
+  );
+});
+
+test('verbose diagnostic boot refuses to overwrite a populated stock command line', (context) => {
+  const paths = stockFixture(context);
+
+  // 夹具的原厂头带着 cmdline，verbose 变体必须拒绝覆盖而不是静默丢弃。
+  assert.throws(
+    () => burnImage.replaceAndroidBootRamdisk(
+      paths.source, paths.initramfs, paths.output, 'console=tty0',
+    ),
+    /refusing to overwrite/,
+  );
+});
+
+test('console command line rejects oversized and non-ASCII payloads', (context) => {
+  const paths = emptyCmdlineFixture(context);
+
+  assert.throws(
+    () => burnImage.replaceAndroidBootRamdisk(
+      paths.source, paths.initramfs, paths.output, 'a'.repeat(512),
+    ),
+    /exceeds 511 bytes/,
+  );
+  assert.throws(
+    () => burnImage.replaceAndroidBootRamdisk(
+      paths.source, paths.initramfs, paths.output, 'console=tty0 温度',
+    ),
+    /printable ASCII/,
+  );
+});
