@@ -242,6 +242,24 @@ export function validateDiagnosticInitramfs(inputPath) {
   if (!/\bhttpd\s+-p\s+80\s+-h\s+\/www\b/u.test(init)) {
     fail('initramfs must start the HTTP status server');
   }
+  // 该机型无可用串口且原厂内核没有 fbcon，framebuffer 是唯一已证实的输出通道。
+  // 信号灯一旦被改掉，刷机后就再次退回「屏幕不动、无从判断」的状态。
+  if (!/\/dev\/fb0\b/u.test(init)) fail('initramfs must drive the framebuffer beacon');
+  const stages = new Set(
+    [...init.matchAll(/\bfb_stage\s+(\d)\b/gu)].map((match) => Number(match[1])),
+  );
+  for (const stage of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    if (!stages.has(stage)) fail(`framebuffer beacon lacks stage ${stage}`);
+  }
+  if (!/\bfb_clear\b/u.test(init)) fail('framebuffer beacon must clear the vendor logo');
+  // 无界写入在不返回 ENOSPC 的 fb 驱动上会挂死，反而让后续阶段画不出来。
+  if (/\bcat\s+\/dev\/(zero|urandom)\s*>\s*"?\$?\{?FB/u.test(init)) {
+    fail('framebuffer beacon must not use unbounded writes');
+  }
+  // shell 阻塞不能影响信号灯，否则「卡住」和「活着」无法区分。
+  if (!/setsid cttyhack \/bin\/sh[\s\S]*?done &/u.test(init)) {
+    fail('framebuffer beacon requires the login shell to run in the background');
+  }
   if (entries.has('usr/sbin/dropbear') || entries.has('usr/bin/dropbearkey')
       || entries.has('root/.ssh/authorized_keys')) {
     fail('HTTP-only initramfs must not contain SSH server payloads');

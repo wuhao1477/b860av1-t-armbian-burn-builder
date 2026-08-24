@@ -51,12 +51,11 @@ function arm64Elf(label) {
 }
 
 function diagnosticInitramfs() {
+  // 正向夹具直接用仓库里真实的 /init，避免夹具与契约各自漂移：
+  // 契约要求 framebuffer 信号灯，而这是刷机后唯一可用的输出通道。
+  const init = fs.readFileSync(new URL('config/stock-diagnostic-init', ROOT), 'utf8');
   return gzipSync(newc([
-    {
-      name: 'init',
-      mode: 0o100755,
-      contents: '#!/bin/busybox sh\nB860_STOCK_KERNEL_DIAGNOSTIC=1\nhttpd -p 80 -h /www\n',
-    },
+    { name: 'init', mode: 0o100755, contents: init },
     { name: 'bin/busybox', mode: 0o100755, contents: arm64Elf('busybox') },
     { name: 'www/index.html', mode: 0o100644, contents: 'B860 diagnostic\n' },
     {
@@ -385,4 +384,59 @@ test('console command line rejects oversized and non-ASCII payloads', (context) 
     ),
     /printable ASCII/,
   );
+});
+
+// 命令名绝不会出现在注释或单引号里（单引号内是 awk 程序和字面量）。
+// 先剥掉这两类再做代码层断言，否则解释性注释和 awk 自己的 printf 都会误报。
+function shellCode(source) {
+  return source
+    .split('\n')
+    .filter((line) => !/^\s*#/u.test(line))
+    .join('\n')
+    .replaceAll(/'[^']*'/gu, "''");
+}
+
+test('repository init drives the framebuffer beacon through every stage', () => {
+  const init = fs.readFileSync(new URL('config/stock-diagnostic-init', ROOT), 'utf8');
+  const code = shellCode(init);
+
+  assert.match(code, /\/dev\/fb0/);
+  assert.match(code, /fb_clear/);
+  for (const stage of [1, 2, 3, 4, 5, 6, 7, 8]) {
+    assert.match(code, new RegExp(`fb_stage ${stage}\\b`), `missing beacon stage ${stage}`);
+  }
+  // 无界写入在不返回 ENOSPC 的 fb 驱动上会挂死，后续阶段就再也画不出来。
+  assert.doesNotMatch(code, /cat\s+\/dev\/(zero|urandom)\s*>\s*"?\$\{?FB/u);
+  // busybox awk 的字符串以 NUL 结尾，用 0 填充拼不出可靠的缓冲区。
+  assert.doesNotMatch(code, /sprintf\("%c",\s*0\)/u);
+  // shell 阻塞不能压掉信号灯，否则「卡住」与「活着」无法区分。
+  assert.match(code, /setsid cttyhack \/bin\/sh[\s\S]*?done &/u);
+});
+
+test('repository init only invokes applets present in the BusyBox configuration', () => {
+  const code = shellCode(fs.readFileSync(new URL('config/stock-diagnostic-init', ROOT), 'utf8'));
+  const config = fs.readFileSync(new URL('config/stock-diagnostic-busybox.config', ROOT), 'utf8');
+  const enabled = new Set(
+    [...config.matchAll(/^CONFIG_([A-Z0-9_]+)=y$/gmu)].map((match) => match[1].toLowerCase()),
+  );
+
+  // allnoconfig 基线下没开的 applet 在镜像里根本不存在，误用只会在实机上静默失败，
+  // 而这台机器没有任何输出通道可供排查。这里挡住最容易顺手写下的那些。
+  const tempting = [
+    'ls', 'grep', 'sed', 'cut', 'tr', 'dd', 'wc', 'tail', 'sort', 'find', 'xargs',
+    'chmod', 'cp', 'mv', 'rm', 'ln', 'expr', 'printf', 'basename', 'dirname', 'tee',
+    'date', 'ps', 'kill', 'insmod', 'modprobe', 'lsmod', 'df', 'stat', 'touch',
+  ];
+  for (const applet of tempting) {
+    if (enabled.has(applet)) continue;
+    const invocation = new RegExp(String.raw`(?:^|[|;&(]|&&|\|\||\$\()\s*${applet}\s`, 'mu');
+    assert.doesNotMatch(
+      code,
+      invocation,
+      `init invokes ${applet} but CONFIG_${applet.toUpperCase()} is not enabled`,
+    );
+  }
+  for (const required of ['cat', 'awk', 'sleep', 'echo']) {
+    assert.ok(enabled.has(required), `beacon depends on CONFIG_${required.toUpperCase()}`);
+  }
 });
