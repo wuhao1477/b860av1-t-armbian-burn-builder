@@ -431,3 +431,26 @@ test('burn workflow gates the HDMI console variant behind an explicit dispatch i
   // 验证侧只能自己重新推导，不得从发布的契约里读回 cmdline。
   assert.doesNotMatch(validateScript, /consoleCmdline/);
 });
+
+test('workflow metadata scalars stay parseable as YAML', () => {
+  // 仓库对 workflow 的校验全是正则，YAML 语法错误不会被任何断言发现，
+  // 而 GitHub 遇到解析失败只会回报「没有 workflow_dispatch」，排查成本很高。
+  // 未加引号的裸标量里出现 ": " 会被 YAML 当成嵌套映射，这里专门守住这一类。
+  const workflows = fs.readdirSync(path.join(root, '.github/workflows'))
+    .filter((name) => name.endsWith('.yml'));
+
+  assert.ok(workflows.length > 0, 'no workflows were discovered');
+  for (const name of workflows) {
+    const lines = read(`.github/workflows/${name}`).split('\n');
+    lines.forEach((line, index) => {
+      const scalar = /^\s*(description|name):\s+(.*)$/u.exec(line);
+      if (!scalar) return;
+      const value = scalar[2].trim();
+      if (value === '' || /^['"|>]/u.test(value)) return;
+      assert.ok(
+        !value.includes(': '),
+        `${name}:${index + 1} unquoted ${scalar[1]} contains ": " and breaks YAML: ${value}`,
+      );
+    });
+  }
+});

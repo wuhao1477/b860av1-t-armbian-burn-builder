@@ -11,7 +11,7 @@ on:
         type: boolean
         default: false
       diagnostic_console:
-        description: Diagnostic only: log the stock kernel to HDMI (tty0) as well as serial
+        description: 'Diagnostic only: also log the stock kernel to HDMI (tty0), not just serial'
         required: false
         type: boolean
         default: false
