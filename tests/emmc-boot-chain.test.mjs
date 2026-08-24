@@ -13,6 +13,7 @@ import {
   inspectUbootEnvironment,
   validateEmmcBootChain,
   writeDosMbr,
+  writeStockUbootEnvironment,
   writeUbootEnvironment,
 } from '../src/emmc-boot-chain.mjs';
 import { makeSparse } from '../scripts/burn-image.mjs';
@@ -201,4 +202,39 @@ test('burn image CLI emits environment and MBR payloads for the factory package'
   assert.equal(mbrResult.status, 0, mbrResult.stderr);
   assert.equal(JSON.parse(envResult.stdout).variableCount, 82);
   assert.equal(JSON.parse(mbrResult.stdout).partitions[0].startLba, 2_342_912);
+});
+
+test('stock environment writer restores the snapshot without modifying a variable', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-stock-env-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const output = path.join(directory, 'env.PARTITION');
+
+  assert.equal(typeof writeStockUbootEnvironment, 'function');
+  const result = writeStockUbootEnvironment(STOCK_ENV, output);
+  const inspected = inspectUbootEnvironment(output);
+
+  assert.equal(result.size, 65536);
+  assert.equal(result.variableCount, 81);
+  assert.equal(result.modifiedVariables, 0);
+  // upgrade_step == 3 会让原厂 upgrade_check 每次开机直接 run update，
+  // 永远走不到 bootcmd 的 storeboot——这正是要复位掉的状态。
+  assert.equal(result.upgradeStep, '0');
+  assert.notEqual(result.upgradeStep, '3');
+  assert.equal(result.bootcmd, 'run storeboot');
+  assert.equal(inspected.storedCrc32, result.storedCrc32);
+  // 与既有的 Armbian 版写入器不同，这里不得注入 start_emmc_autoscript。
+  assert.equal(inspected.variables.start_emmc_autoscript, undefined);
+});
+
+test('stock environment writer stays byte-identical across runs', (context) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-stock-env-'));
+  context.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const first = path.join(directory, 'a.PARTITION');
+  const second = path.join(directory, 'b.PARTITION');
+
+  writeStockUbootEnvironment(STOCK_ENV, first);
+  writeStockUbootEnvironment(STOCK_ENV, second);
+
+  // 构建侧与独立验证侧各自生成后要用 cmp 比对，必须可复现。
+  assert.deepEqual(fs.readFileSync(first), fs.readFileSync(second));
 });

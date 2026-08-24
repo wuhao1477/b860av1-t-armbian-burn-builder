@@ -29,13 +29,33 @@ for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf 
   bootloader.PARTITION meson1.dtb logo.PARTITION boot.PARTITION; do
   [[ -s "$tmp/unpack/$name" ]] || { echo "diagnostic package is missing $name" >&2; exit 1; }
 done
-for prohibited in 1.PARTITION data.PARTITION env.PARTITION system.PARTITION \
-  vendor.PARTITION recovery.PARTITION cache.PARTITION stock-boot.PARTITION; do
+variant=${B860_DIAGNOSTIC_VARIANT:-console-beacon}
+prohibited_partitions=(1.PARTITION data.PARTITION system.PARTITION
+  vendor.PARTITION recovery.PARTITION cache.PARTITION stock-boot.PARTITION)
+# 只有 stock-env-reset 允许出现 env.PARTITION，其余变体必须完全不碰 env——
+# 否则「换了 env 才好」与「本来就会好」无法区分。
+if [[ "$variant" != stock-env-reset ]]; then
+  prohibited_partitions+=(env.PARTITION)
+fi
+for prohibited in "${prohibited_partitions[@]}"; do
   [[ ! -e "$tmp/unpack/$prohibited" ]] || {
     echo "diagnostic package contains prohibited $prohibited" >&2
     exit 1
   }
 done
+if [[ "$variant" == stock-env-reset ]]; then
+  [[ -s "$tmp/unpack/env.PARTITION" ]] || {
+    echo 'stock-env-reset package is missing env.PARTITION' >&2
+    exit 1
+  }
+  node "$root/scripts/burn-image.mjs" stock-uboot-env \
+    "$root/config/stock-environment.json" "$tmp/expected-env.PARTITION" >/dev/null
+  cmp --silent "$tmp/unpack/env.PARTITION" "$tmp/expected-env.PARTITION" || {
+    echo 'packaged env.PARTITION differs from the stock snapshot' >&2
+    exit 1
+  }
+  node "$root/scripts/burn-image.mjs" check-uboot-env "$tmp/unpack/env.PARTITION" >/dev/null
+fi
 
 for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf \
   bootloader.PARTITION meson1.dtb logo.PARTITION; do
@@ -53,8 +73,7 @@ node "$root/scripts/burn-image.mjs" check-stock-bootloader \
   > "$tmp/stock-bootloader-contract.json"
 # 验证侧独立重推，不读发布的契约，再用 cmp 与发布件逐字节比对，
 # 保持与构建侧互不信任。变体经同一个环境变量传入，两侧必须得出相同结论。
-variant=${B860_DIAGNOSTIC_VARIANT:-console-beacon}
-if [[ "$variant" == stock-control ]]; then
+if [[ "$variant" == stock-control || "$variant" == stock-env-reset ]]; then
   node "$root/scripts/burn-image.mjs" check-stock-control-boot \
     "$root/board-inputs/stock-boot.PARTITION" "$tmp/unpack/boot.PARTITION" \
     "$root/config/burn-inputs.json" \

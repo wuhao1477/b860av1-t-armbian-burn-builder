@@ -76,6 +76,42 @@ export function writeUbootEnvironment(templatePath, outputPath) {
   return inspectUbootEnvironment(outputPath);
 }
 
+/**
+ * 逐字面写回原厂环境快照，一个变量都不改。
+ *
+ * 用途：原厂 preboot 里的 upgrade_check 在 upgrade_step == 3 时直接 run update，
+ * 而 update 会先 `update 1000` 等 USB 烧录工具——于是每次开机都停在 splash，
+ * 永远走不到 bootcmd 的 storeboot。这与 boot.PARTITION 的内容完全无关，正好
+ * 解释了「改 ramdisk 的三版与逐字节原厂对照包表现完全一致」。
+ *
+ * 快照里的 upgrade_step 是 0，落到 upgrade_check 的 else 分支，直通 bootcmd。
+ * 因此这里刻意不做任何修改：偏离越少，实验的区分力越强。
+ */
+export function writeStockUbootEnvironment(templatePath, outputPath) {
+  const { source, expectedCount } = readTemplate(templatePath);
+  const parsed = parseVariables(source);
+  if (parsed.variableCount !== expectedCount) fail('stock U-Boot variable count is invalid');
+  if (parsed.variables.upgrade_step === '3') {
+    fail('stock environment snapshot itself parks the board in upgrade mode');
+  }
+  const data = encodeVariables(parsed.variables);
+  const image = Buffer.alloc(ENV_BYTES);
+  image.writeUInt32LE(crc32(data), 0);
+  data.copy(image, 4);
+  fs.writeFileSync(outputPath, image);
+  const inspected = inspectUbootEnvironment(outputPath);
+  if (inspected.variableCount !== expectedCount) fail('written env variable count differs');
+  return {
+    schemaVersion: 1,
+    size: inspected.size,
+    storedCrc32: inspected.storedCrc32,
+    variableCount: inspected.variableCount,
+    upgradeStep: inspected.variables.upgrade_step,
+    bootcmd: inspected.variables.bootcmd,
+    modifiedVariables: 0,
+  };
+}
+
 export function inspectUbootEnvironment(imagePath) {
   const image = fs.readFileSync(imagePath);
   if (image.length !== ENV_BYTES) fail('env.PARTITION must be exactly 65536 bytes');

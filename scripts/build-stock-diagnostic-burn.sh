@@ -30,18 +30,21 @@ node "$root/scripts/burn-image.mjs" check-stock-bootloader \
   "$package/bootloader.PARTITION" "$root/config/burn-inputs.json" \
   > "$out/stock-bootloader-contract.json"
 # 变体选择：
-#   console-beacon  重打包 boot.PARTITION，替换 ramdisk 并写入 HDMI 控制台 cmdline
-#   stock-control   boot.PARTITION 用原厂副本逐字节不改，作为对照实验
-# 三版修改过 ramdisk 的镜像在实机上表现完全一致，说明我们改的内容可能从未被
-# imgread 读取。对照包用来把「重打包被拒绝」与「env/打包层面问题」分开，
-# 若它能正常进入 Android，也同时把 boot 分区恢复回原厂。
+#   console-beacon   重打包 boot.PARTITION，替换 ramdisk 并写入 HDMI 控制台 cmdline
+#   stock-control    boot.PARTITION 用原厂副本逐字节不改，作为对照实验
+#   stock-env-reset   原厂 boot 副本 + 写回原厂 env 快照，复位 upgrade_step
+#
+# 对照实验已证明 boot.PARTITION 的内容与现象无关：逐字节原厂副本与三版改过
+# ramdisk 的镜像表现完全一致。因此故障点在 storeboot 之上——最可能是 env 里
+# upgrade_step 残留为 3，使 preboot 的 upgrade_check 每次开机直接 run update，
+# 而 update 会先等 USB 烧录工具，于是永远停在 splash，走不到 bootcmd。
 variant=${B860_DIAGNOSTIC_VARIANT:-console-beacon}
 case "$variant" in
-  console-beacon|stock-control) ;;
+  console-beacon|stock-control|stock-env-reset) ;;
   *) echo "unknown diagnostic variant: $variant" >&2; exit 1 ;;
 esac
 
-if [[ "$variant" == stock-control ]]; then
+if [[ "$variant" == stock-control || "$variant" == stock-env-reset ]]; then
   cp -- "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION"
   node "$root/scripts/burn-image.mjs" check-stock-control-boot \
     "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
@@ -61,6 +64,16 @@ else
     "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
     "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
     > "$out/diagnostic-boot-contract.json"
+fi
+
+# 只有 stock-env-reset 变体写 env 分区；其余变体保持「不碰 env」，
+# 这样两种结果才能互相印证是不是 env 造成的。
+if [[ "$variant" == stock-env-reset ]]; then
+  node "$root/scripts/burn-image.mjs" stock-uboot-env \
+    "$root/config/stock-environment.json" "$package/env.PARTITION" \
+    > "$out/stock-env-contract.json"
+else
+  : > "$out/stock-env-contract.json"
 fi
 
 ampack="$tmp/ampack-src"

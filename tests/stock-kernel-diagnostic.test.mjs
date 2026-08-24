@@ -488,3 +488,17 @@ test('diagnostic build and validator agree on the variant switch', () => {
   assert.match(builder, /> "\$out\/diagnostic-boot-contract\.json"/u);
   assert.match(validator, /> "\$tmp\/diagnostic-boot-contract\.json"/u);
 });
+
+test('env reset variant is the only one allowed to ship env.PARTITION', () => {
+  const builder = fs.readFileSync(new URL('scripts/build-stock-diagnostic-burn.sh', ROOT), 'utf8');
+  const validator = fs.readFileSync(new URL('scripts/validate-stock-diagnostic-burn.sh', ROOT), 'utf8');
+
+  assert.match(builder, /stock-env-reset/u);
+  assert.match(builder, /stock-uboot-env/u);
+  assert.match(validator, /stock-env-reset/u);
+  // 其余变体必须继续禁止 env.PARTITION，否则「换了 env 才好」与「本来就会好」
+  // 无法区分，对照实验失去意义。
+  assert.match(validator, /prohibited_partitions\+=\(env\.PARTITION\)/u);
+  // 验证侧必须自己重新生成 env 再比对，不能直接信任包里的字节。
+  assert.match(validator, /cmp --silent "\$tmp\/unpack\/env\.PARTITION"/u);
+});
