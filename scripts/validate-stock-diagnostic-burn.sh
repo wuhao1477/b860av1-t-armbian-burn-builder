@@ -51,17 +51,25 @@ node "$root/scripts/burn-image.mjs" check-diagnostic-initramfs "$initramfs" \
 node "$root/scripts/burn-image.mjs" check-stock-bootloader \
   "$tmp/unpack/bootloader.PARTITION" "$root/config/burn-inputs.json" \
   > "$tmp/stock-bootloader-contract.json"
-# 验证侧独立从 config/stock-environment.json 重新推导 cmdline，不读发布的契约，
-# 再用 cmp 与发布件逐字节比对，保持与构建侧互不信任。
-console_cmdline=()
-if [[ "${B860_DIAGNOSTIC_CONSOLE:-0}" == 1 ]]; then
-  console_cmdline+=("$(node "$root/scripts/burn-image.mjs" diagnostic-console-cmdline \
-    "$root/config/stock-environment.json")")
+# 验证侧独立重推，不读发布的契约，再用 cmp 与发布件逐字节比对，
+# 保持与构建侧互不信任。变体经同一个环境变量传入，两侧必须得出相同结论。
+variant=${B860_DIAGNOSTIC_VARIANT:-console-beacon}
+if [[ "$variant" == stock-control ]]; then
+  node "$root/scripts/burn-image.mjs" check-stock-control-boot \
+    "$root/board-inputs/stock-boot.PARTITION" "$tmp/unpack/boot.PARTITION" \
+    "$root/config/burn-inputs.json" \
+    > "$tmp/diagnostic-boot-contract.json"
+else
+  console_cmdline=()
+  if [[ "${B860_DIAGNOSTIC_CONSOLE:-0}" == 1 ]]; then
+    console_cmdline+=("$(node "$root/scripts/burn-image.mjs" diagnostic-console-cmdline \
+      "$root/config/stock-environment.json")")
+  fi
+  node "$root/scripts/burn-image.mjs" check-stock-diagnostic-boot \
+    "$root/board-inputs/stock-boot.PARTITION" "$tmp/unpack/boot.PARTITION" \
+    "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
+    > "$tmp/diagnostic-boot-contract.json"
 fi
-node "$root/scripts/burn-image.mjs" check-stock-diagnostic-boot \
-  "$root/board-inputs/stock-boot.PARTITION" "$tmp/unpack/boot.PARTITION" \
-  "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
-  > "$tmp/diagnostic-boot-contract.json"
 
 for contract in diagnostic-inputs-contract.json diagnostic-initramfs-contract.json \
   stock-bootloader-contract.json diagnostic-boot-contract.json; do

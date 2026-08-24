@@ -29,21 +29,39 @@ done
 node "$root/scripts/burn-image.mjs" check-stock-bootloader \
   "$package/bootloader.PARTITION" "$root/config/burn-inputs.json" \
   > "$out/stock-bootloader-contract.json"
-# B860_DIAGNOSTIC_CONSOLE=1 时向 Android boot 头的 cmdline 字段写入完整 cmdline，
-# 让内核日志同时打到 HDMI(tty0)，供无串口场景拍屏取证。默认变体不写该字段。
-# 写入值记录在 diagnostic-boot-contract.json 的 consoleCmdline 里，无需单独产物。
-console_cmdline=()
-if [[ "${B860_DIAGNOSTIC_CONSOLE:-0}" == 1 ]]; then
-  console_cmdline+=("$(node "$root/scripts/burn-image.mjs" diagnostic-console-cmdline \
-    "$root/config/stock-environment.json")")
+# 变体选择：
+#   console-beacon  重打包 boot.PARTITION，替换 ramdisk 并写入 HDMI 控制台 cmdline
+#   stock-control   boot.PARTITION 用原厂副本逐字节不改，作为对照实验
+# 三版修改过 ramdisk 的镜像在实机上表现完全一致，说明我们改的内容可能从未被
+# imgread 读取。对照包用来把「重打包被拒绝」与「env/打包层面问题」分开，
+# 若它能正常进入 Android，也同时把 boot 分区恢复回原厂。
+variant=${B860_DIAGNOSTIC_VARIANT:-console-beacon}
+case "$variant" in
+  console-beacon|stock-control) ;;
+  *) echo "unknown diagnostic variant: $variant" >&2; exit 1 ;;
+esac
+
+if [[ "$variant" == stock-control ]]; then
+  cp -- "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION"
+  node "$root/scripts/burn-image.mjs" check-stock-control-boot \
+    "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
+    "$root/config/burn-inputs.json" \
+    > "$out/diagnostic-boot-contract.json"
+else
+  # 写入值记录在 diagnostic-boot-contract.json 的 consoleCmdline 里，无需单独产物。
+  console_cmdline=()
+  if [[ "${B860_DIAGNOSTIC_CONSOLE:-0}" == 1 ]]; then
+    console_cmdline+=("$(node "$root/scripts/burn-image.mjs" diagnostic-console-cmdline \
+      "$root/config/stock-environment.json")")
+  fi
+  node "$root/scripts/burn-image.mjs" replace-stock-ramdisk \
+    "$root/board-inputs/stock-boot.PARTITION" "$initramfs" "$package/boot.PARTITION" \
+    "${console_cmdline[@]}" >/dev/null
+  node "$root/scripts/burn-image.mjs" check-stock-diagnostic-boot \
+    "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
+    "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
+    > "$out/diagnostic-boot-contract.json"
 fi
-node "$root/scripts/burn-image.mjs" replace-stock-ramdisk \
-  "$root/board-inputs/stock-boot.PARTITION" "$initramfs" "$package/boot.PARTITION" \
-  "${console_cmdline[@]}" >/dev/null
-node "$root/scripts/burn-image.mjs" check-stock-diagnostic-boot \
-  "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
-  "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
-  > "$out/diagnostic-boot-contract.json"
 
 ampack="$tmp/ampack-src"
 mapfile -t ampack_source < <(node -e '

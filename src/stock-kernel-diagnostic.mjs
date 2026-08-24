@@ -365,6 +365,36 @@ function validateSourceContract(sourceImage, sourcePath, config) {
   return parseAndroidBoot(sourceImage, sourcePath);
 }
 
+/**
+ * 对照变体：boot.PARTITION 必须是原厂副本，逐字节不改。
+ * 用途是把「重打包 boot 被 imgread 拒绝」与「env/打包层面问题」分开——
+ * 三版修改过 ramdisk 的镜像表现完全一致，说明我们改的东西可能从未被读取。
+ * 如果对照包能进 Android，问题就锁定在重打包；如果同样停在 splash，
+ * 则 boot.PARTITION 的内容与现象无关，继续改 initramfs 毫无意义。
+ */
+export function validateStockControlBoot(sourcePath, candidatePath, configPath) {
+  const sourceImage = fs.readFileSync(sourcePath);
+  const candidateImage = fs.readFileSync(candidatePath);
+  const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+  const source = validateSourceContract(sourceImage, sourcePath, config);
+  if (!sourceImage.equals(candidateImage)) {
+    fail('control boot partition differs from the stock image');
+  }
+  return {
+    schemaVersion: 3,
+    variant: 'stock-control',
+    sourceBootSha256: sha256(sourceImage),
+    candidateBootSha256: sha256(candidateImage),
+    kernelSha256: sha256(source.kernel),
+    sourceRamdiskSha256: sha256(source.ramdisk),
+    sourceRamdiskSize: source.ramdisk.length,
+    secondSha256: sha256(source.second),
+    kernelVersion: kernelVersion(source.kernel),
+    consoleCmdline: null,
+    bootPartitionModified: false,
+  };
+}
+
 export function validateStockDiagnosticBoot(
   sourcePath, candidatePath, initramfsPath, configPath, consoleCmdline,
 ) {
@@ -393,7 +423,8 @@ export function validateStockDiagnosticBoot(
     fail('diagnostic boot changed a protected header field');
   }
   return {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    variant: 'console-beacon',
     sourceBootSha256: sha256(sourceImage),
     candidateBootSha256: sha256(candidateImage),
     kernelSha256: sha256(source.kernel),

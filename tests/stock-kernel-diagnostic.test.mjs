@@ -444,3 +444,47 @@ test('repository init only invokes applets present in the BusyBox configuration'
     assert.ok(enabled.has(required), `beacon depends on CONFIG_${required.toUpperCase()}`);
   }
 });
+
+test('stock control variant requires a byte-identical boot partition', (context) => {
+  const paths = stockFixture(context);
+  const config = diagnosticConfig(paths);
+  const control = path.join(paths.directory, 'control.PARTITION');
+  fs.copyFileSync(paths.source, control);
+
+  assert.equal(typeof burnImage.validateStockControlBoot, 'function');
+  const accepted = burnImage.validateStockControlBoot(paths.source, control, config);
+
+  assert.equal(accepted.variant, 'stock-control');
+  assert.equal(accepted.bootPartitionModified, false);
+  assert.equal(accepted.consoleCmdline, null);
+  assert.equal(accepted.sourceBootSha256, accepted.candidateBootSha256);
+  assert.equal(accepted.kernelVersion, '3.14.29-g57f7ee1');
+});
+
+test('stock control variant rejects a replaced ramdisk', (context) => {
+  const paths = stockFixture(context);
+  const config = diagnosticConfig(paths);
+  burnImage.replaceAndroidBootRamdisk(paths.source, paths.initramfs, paths.output);
+
+  // 对照包的全部意义在于「除 boot 之外一切照旧」，任何改动都会让实验失去区分力。
+  assert.throws(
+    () => burnImage.validateStockControlBoot(paths.source, paths.output, config),
+    /differs from the stock image/,
+  );
+});
+
+test('diagnostic build and validator agree on the variant switch', () => {
+  const builder = fs.readFileSync(new URL('scripts/build-stock-diagnostic-burn.sh', ROOT), 'utf8');
+  const validator = fs.readFileSync(new URL('scripts/validate-stock-diagnostic-burn.sh', ROOT), 'utf8');
+
+  for (const script of [builder, validator]) {
+    assert.match(script, /B860_DIAGNOSTIC_VARIANT:-console-beacon/u);
+    assert.match(script, /stock-control/u);
+    assert.match(script, /check-stock-control-boot/u);
+  }
+  // 未知变体必须显式失败，否则会静默退回 beacon 并让对照实验失去意义。
+  assert.match(builder, /unknown diagnostic variant/u);
+  // 两侧写入同一个契约文件名，工作流的资产清单才能保持静态。
+  assert.match(builder, /> "\$out\/diagnostic-boot-contract\.json"/u);
+  assert.match(validator, /> "\$tmp\/diagnostic-boot-contract\.json"/u);
+});
