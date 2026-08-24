@@ -243,22 +243,26 @@ export function validateDiagnosticInitramfs(inputPath) {
     fail('initramfs must start the HTTP status server');
   }
   // 该机型无可用串口且原厂内核没有 fbcon，framebuffer 是唯一已证实的输出通道。
-  // 信号灯一旦被改掉，刷机后就再次退回「屏幕不动、无从判断」的状态。
+  // 信号灯一旦被改坏，刷机后就再次退回「屏幕不动、无从判断」的状态。
   if (!/\/dev\/fb0\b/u.test(init)) fail('initramfs must drive the framebuffer beacon');
   const stages = new Set(
-    [...init.matchAll(/\bfb_stage\s+(\d)\b/gu)].map((match) => Number(match[1])),
+    [...init.matchAll(/^\s*stage\s+(\d)\s*$/gmu)].map((match) => Number(match[1])),
   );
-  for (const stage of [1, 2, 3, 4, 5, 6, 7, 8]) {
+  for (const stage of [1, 2, 3, 4, 5, 6]) {
     if (!stages.has(stage)) fail(`framebuffer beacon lacks stage ${stage}`);
   }
-  if (!/\bfb_clear\b/u.test(init)) fail('framebuffer beacon must clear the vendor logo');
-  // 无界写入在不返回 ENOSPC 的 fb 驱动上会挂死，反而让后续阶段画不出来。
-  if (/\bcat\s+\/dev\/(zero|urandom)\s*>\s*"?\$?\{?FB/u.test(init)) {
-    fail('framebuffer beacon must not use unbounded writes');
+  // 信号灯必须独立于主流程：放在前台时，任何不返回的调用都会让屏幕冻住，
+  // 「卡在某一步」与「内核挂了」就无法区分。
+  if (!/\bblink_forever\s*&/u.test(init)) {
+    fail('framebuffer beacon must blink from a background process');
   }
-  // shell 阻塞不能影响信号灯，否则「卡住」和「活着」无法区分。
-  if (!/setsid cttyhack \/bin\/sh[\s\S]*?done &/u.test(init)) {
-    fail('framebuffer beacon requires the login shell to run in the background');
+  // 局部填充在双缓冲、位深误判或 panning 下会让多个阶段看起来完全相同。
+  if (/\btotal\s*\*\s*stage\s*\/\s*8\b/u.test(init)) {
+    fail('framebuffer beacon must fill the whole screen, not a fraction');
+  }
+  // 无界写入在不返回 ENOSPC 的 fb 驱动上会挂死，后续阶段就再也画不出来。
+  if (/\bcat\s+\/dev\/(zero|urandom)\s*>\s*"?\$\{?FB/u.test(init)) {
+    fail('framebuffer beacon must not use unbounded writes');
   }
   if (entries.has('usr/sbin/dropbear') || entries.has('usr/bin/dropbearkey')
       || entries.has('root/.ssh/authorized_keys')) {

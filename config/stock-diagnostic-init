@@ -24,24 +24,25 @@ emit() {
   echo "$message" > /dev/tty0 2>/dev/null || true
 }
 
-# 该机型没有可用的调试串口，原厂 Android 3.14 内核也没有 framebuffer console，
-# 所以 console=tty0 收不到任何文字；LED 未必以 Linux LED class 暴露，以太网驱动
-# 可能是本 initramfs 里没有的模块。唯一已证实可用的输出通道是显示驱动本身——
-# 原厂 logo 在加载本内核后改变了几何，说明 OSD 层确实被重新初始化过。
+# 这台机器没有可用的调试串口，原厂 Android 3.14 内核没有 framebuffer console，
+# LED 未必以 Linux LED class 暴露，以太网驱动可能是本 initramfs 里没有的模块。
+# 唯一已证实可用的输出通道是 /dev/fb0：加载本内核后原厂 logo 的几何发生过变化，
+# 说明 OSD 层确实被重新初始化过。
 #
-# 因此把 /dev/fb0 当信号灯：先整屏刷成近黑(logo 消失即证明 /init 已运行)，
-# 之后每个阶段在顶部画出 N/8 高度的白条。最终画面是静态的，不必盯着看。
+# 两条设计铁律，都是被前一版的失败教出来的：
 #
-# 全部写入都用 awk 生成固定字节数，不用 cat /dev/zero 之类的无界写入——万一
-# 该 fb 驱动不返回 ENOSPC，无界写入会挂死，后续阶段就再也画不出来，反而误判。
-# 近黑用 0x01 而非 0x00：busybox awk 的字符串以 NUL 结尾，sprintf("%c", 0)
-# 拼不出可靠的填充串，而 0x01 在任何位深下都与纯黑无法用肉眼区分。
+# 1) 只做整屏写入，不做「顶部 N/8 白条」那种局部填充。framebuffer 可能是双缓冲
+#    (virtual_size 为可见区的两倍)、位深可能探测错、可见起点不一定在偏移 0——
+#    局部填充在这些情况下会退化成「几个阶段看起来完全一样」，前一版正是如此。
+#    整屏写入对位深、stride、双缓冲、panning 全部免疫。
+#
+# 2) 信号灯必须在后台独立运行，阶段号通过文件传递。前一版把闪烁放在前台，
+#    结果只要 udhcpc 之类的调用不返回，屏幕就冻住，「卡住」和「内核挂了」
+#    完全无法区分。放到后台之后：画面还在闪 = /init 活着，闪的次数就是卡住的
+#    位置；画面彻底静止 = 内核真的死了。
 FB=/dev/fb0
-FB_BYTES=0
-
-fb_available() {
-  [ -c "$FB" ] && [ "$FB_BYTES" -gt 0 ]
-}
+FB_BYTES=8388608
+STAGE_FILE=/run/b860-stage
 
 fb_measure() {
   FB_BYTES=$(
@@ -53,39 +54,91 @@ fb_measure() {
       NR == 2 { b = $0 + 0 }
       END {
         if (w <= 0 || h <= 0) { w = 1920; h = 1080 }
-        if (b <= 0) b = 16
-        printf "%d", w * h * b / 8
+        if (b <= 0) b = 32
+        # 刻意高估：写超出末尾只会得到 ENOSPC 并被忽略，而写不足会让整块屏幕
+        # 只变化一部分，正是前一版误判的来源。两倍用于覆盖双缓冲与位深误判。
+        n = w * h * b / 8 * 2
+        if (n < 8388608) n = 8388608
+        if (n > 33554432) n = 33554432
+        printf "%d", n
       }'
-  ) 2>/dev/null || FB_BYTES=0
-  [ -n "$FB_BYTES" ] || FB_BYTES=0
+  ) 2>/dev/null || FB_BYTES=8388608
+  [ -n "$FB_BYTES" ] || FB_BYTES=8388608
 }
 
-# $1 = 覆盖高度(1..8 个 1/8)，$2 = 填充字节值
+# 整屏填充为单一字节值。近黑取 0x01 而非 0x00：busybox awk 字符串以 NUL 结尾，
+# sprintf("%c", 0) 拼不出可靠的填充缓冲区，而 0x01 在任何位深下都与纯黑无异。
 fb_fill() {
-  fb_available || return 0
-  awk -v total="$FB_BYTES" -v stage="$1" -v value="$2" 'BEGIN {
-    limit = int(total * stage / 8)
+  [ -c "$FB" ] || return 0
+  awk -v total="$FB_BYTES" -v value="$1" 'BEGIN {
     unit = sprintf("%c", value)
     buffer = ""
     for (i = 0; i < 4096; i++) buffer = buffer unit
     written = 0
-    while (written + 4096 <= limit) { printf "%s", buffer; written += 4096 }
+    while (written < total) { printf "%s", buffer; written += 4096 }
   }' > "$FB" 2>/dev/null || true
 }
 
-fb_clear() { fb_fill 8 1; }
-fb_stage() { fb_fill "$1" 255; }
+fb_on() { fb_fill 255; }
+fb_off() { fb_fill 1; }
+
+stage() {
+  echo "$1" > "$STAGE_FILE"
+  emit "stage $1"
+}
+
+# 每轮按当前阶段号闪对应次数，组间留 3 秒长间隔以便计数。
+blink_forever() {
+  while true; do
+    count=$(cat "$STAGE_FILE" 2>/dev/null)
+    [ -n "$count" ] || count=0
+    index=0
+    while [ "$index" -lt "$count" ]; do
+      fb_on
+      sleep 1
+      fb_off
+      sleep 1
+      index=$((index + 1))
+    done
+    sleep 3
+  done
+}
 
 fb_measure
-fb_clear
-fb_stage 1
+echo 0 > "$STAGE_FILE"
+fb_off
+blink_forever &
+
+stage 1
 emit "stock Linux 3.14 kernel entered /init"
 
 for led in /sys/class/leds/*; do
   [ -d "$led" ] || continue
   echo timer > "$led/trigger" 2>/dev/null || echo 1 > "$led/brightness" 2>/dev/null || true
 done
-fb_stage 2
+
+# 先把已知信息落盘，之后任何一步卡住，HTTP 若能通仍拿得到内容。
+write_status() {
+  {
+    echo 'B860 stock-kernel diagnostic'
+    echo
+    echo 'Kernel:'
+    uname -a
+    echo
+    echo 'Command line:'
+    cat /proc/cmdline
+    echo
+    echo 'Framebuffer bytes:'
+    echo "$FB_BYTES"
+    echo
+    echo 'Network interfaces:'
+    echo /sys/class/net/*
+    echo
+    echo 'Network:'
+    ip addr show 2>/dev/null || true
+  } > /www/index.txt
+}
+write_status
 
 ip link set lo up
 iface=''
@@ -97,54 +150,31 @@ for network_path in /sys/class/net/*; do
 done
 
 if [ -n "$iface" ]; then
-  # 4/8 = 内核注册了网卡；3/8 = 一个都没有，说明以太网驱动不在本 initramfs 里。
-  fb_stage 4
+  # 3 闪 = 内核注册了网卡；2 闪 = 一个都没有，说明以太网驱动不在本 initramfs 里。
+  # 这是本轮最关键的一比特。
+  stage 3
   ip link set "$iface" up
   if udhcpc -f -q -n -t 5 -T 3 -i "$iface" -x hostname:b860-diag \
       -s /usr/share/udhcpc/diagnostic.script; then
     emit "DHCP configured $iface"
-    fb_stage 5
+    stage 4
   else
     ifconfig "$iface" 169.254.86.10 netmask 255.255.0.0 up
     emit "DHCP failed; fallback is 169.254.86.10"
-    fb_stage 6
+    stage 5
   fi
 else
   emit "no Ethernet interface was registered"
-  fb_stage 3
+  stage 2
 fi
 
-{
-  echo 'B860 stock-kernel diagnostic'
-  echo
-  echo 'Kernel:'
-  uname -a
-  echo
-  echo 'Command line:'
-  cat /proc/cmdline
-  echo
-  echo 'Network interfaces:'
-  echo /sys/class/net/*
-  echo
-  echo 'Network:'
-  ip addr show
-} > /www/index.txt
+write_status
 httpd -p 80 -h /www
-fb_stage 7
+stage 6
+emit "HTTP status server started"
 
-address=$(ip -4 addr show dev "$iface" 2>/dev/null | awk '/inet / {print $2}' | head -n1)
-emit "HTTP status http://${address%/*}/index.txt"
-
-# shell 放后台：有串口时仍可用，但它阻塞与否不能影响信号灯。
+# 前台保留一个 shell（将来接上串口时可用）。它是否阻塞已经不影响信号灯了。
 while true; do
   setsid cttyhack /bin/sh
   sleep 1
-done &
-
-# 整屏白/近黑交替 = /init 走完全程且仍在运行；静止画面 = 卡在对应的白条阶段。
-while true; do
-  fb_stage 8
-  sleep 2
-  fb_clear
-  sleep 2
 done

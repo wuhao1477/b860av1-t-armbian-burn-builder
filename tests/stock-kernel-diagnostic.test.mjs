@@ -401,16 +401,20 @@ test('repository init drives the framebuffer beacon through every stage', () => 
   const code = shellCode(init);
 
   assert.match(code, /\/dev\/fb0/);
-  assert.match(code, /fb_clear/);
-  for (const stage of [1, 2, 3, 4, 5, 6, 7, 8]) {
-    assert.match(code, new RegExp(`fb_stage ${stage}\\b`), `missing beacon stage ${stage}`);
+  for (const stage of [1, 2, 3, 4, 5, 6]) {
+    assert.match(code, new RegExp(`^\\s*stage ${stage}\\s*$`, 'mu'), `missing stage ${stage}`);
   }
+  // 信号灯必须独立于主流程：放前台时任何不返回的调用都会冻住屏幕，
+  // 「卡在某一步」与「内核挂了」就无法区分——前一版正是栽在这里。
+  assert.match(code, /blink_forever &/u);
+  // 局部填充在双缓冲、位深误判或 panning 下会让多个阶段看起来完全一样。
+  assert.doesNotMatch(code, /total\s*\*\s*stage\s*\/\s*8/u);
   // 无界写入在不返回 ENOSPC 的 fb 驱动上会挂死，后续阶段就再也画不出来。
   assert.doesNotMatch(code, /cat\s+\/dev\/(zero|urandom)\s*>\s*"?\$\{?FB/u);
   // busybox awk 的字符串以 NUL 结尾，用 0 填充拼不出可靠的缓冲区。
   assert.doesNotMatch(code, /sprintf\("%c",\s*0\)/u);
-  // shell 阻塞不能压掉信号灯，否则「卡住」与「活着」无法区分。
-  assert.match(code, /setsid cttyhack \/bin\/sh[\s\S]*?done &/u);
+  // 高估填充字节数：写超界只是 ENOSPC，写不足则整块屏幕只变化一部分。
+  assert.match(code, /FB_BYTES/u);
 });
 
 test('repository init only invokes applets present in the BusyBox configuration', () => {
