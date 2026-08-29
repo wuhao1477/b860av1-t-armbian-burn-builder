@@ -35,6 +35,14 @@ import {
   writeStockUbootEnvironment,
   writeUbootEnvironment,
 } from '../src/emmc-boot-chain.mjs';
+import {
+  handoffScript,
+  inspectUbootScriptImage,
+  parseAmlResource,
+  recoloredVendorBitmap,
+  ubootScriptImage,
+  writeSdHandoffKit,
+} from '../src/sd-card-handoff.mjs';
 
 export { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-sparse.mjs';
 export { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-roles.mjs';
@@ -62,6 +70,14 @@ export {
   writeStockUbootEnvironment,
   writeUbootEnvironment,
 } from '../src/emmc-boot-chain.mjs';
+export {
+  handoffScript,
+  inspectUbootScriptImage,
+  parseAmlResource,
+  recoloredVendorBitmap,
+  ubootScriptImage,
+  writeSdHandoffKit,
+} from '../src/sd-card-handoff.mjs';
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
 const STOCK_BOOTLOADER_BYTES = 768 * 1024;
@@ -377,6 +393,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'stock-uboot-env' && args.length === 2) console.log(JSON.stringify(
     writeStockUbootEnvironment(...args),
   ));
+  else if (command === 'sd-handoff-kit' && args.length === 4) console.log(JSON.stringify(
+    writeSdHandoffKit(...args),
+  ));
   else if (command === 'merge-busybox-config' && args.length === 3) fs.writeFileSync(
     args[2],
     mergeBusyboxConfig(fs.readFileSync(args[0], 'utf8'), fs.readFileSync(args[1], 'utf8')),
@@ -424,5 +443,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     replaceLinuxTargetDtb(...args),
   ));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-bootloader bootloader config | check-stock-boot boot [root-uuid] | replace-stock-ramdisk stock initramfs output [console-cmdline] | diagnostic-console-cmdline stock-environment | check-stock-diagnostic-boot stock candidate initramfs config [console-cmdline] | check-stock-control-boot stock candidate config | stock-uboot-env template output | merge-busybox-config baseline fragment output | check-diagnostic-build-config busybox | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs uboot-env template output | dos-mbr output fat-bytes root-bytes | check-emmc-chain mbr env fat sparse-root | check-burn-dtb-roles vendor-dtb linux-dtb | check-uboot-env env | check-dos-mbr mbr | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-bootloader bootloader config | check-stock-boot boot [root-uuid] | replace-stock-ramdisk stock initramfs output [console-cmdline] | diagnostic-console-cmdline stock-environment | check-stock-diagnostic-boot stock candidate initramfs config [console-cmdline] | check-stock-control-boot stock candidate config | stock-uboot-env template output | sd-handoff-kit stock-environment logo recovery-boot output-dir | merge-busybox-config baseline fragment output | check-diagnostic-build-config busybox | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw boot-contract dtb-contract rootfs-contract | check-report report burn raw boot-contract dtb-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

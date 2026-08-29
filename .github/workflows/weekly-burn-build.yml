@@ -290,7 +290,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --yes build-essential cpio file \
-            gcc-aarch64-linux-gnu git gzip libc6-dev-arm64-cross qemu-user-static xz-utils
+            gcc-aarch64-linux-gnu git gzip libc6-dev-arm64-cross qemu-user-static \
+            u-boot-tools xz-utils
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           toolchain: stable
@@ -308,6 +309,12 @@ jobs:
           original=$(sha256sum out/burn.img | awk '{print $1}')
           expanded=$(xz --decompress --stdout out/burn.img.xz | sha256sum | awk '{print $1}')
           [[ "$expanded" == "$original" ]] || { echo 'xz expansion digest differs from burn.img' >&2; exit 1; }
+      - name: Package the SD handoff kit
+        run: |
+          set -Eeuo pipefail
+          if [[ -d out/sd-handoff ]]; then
+            (cd out && zip -X -9 -r sd-handoff.zip sd-handoff >/dev/null && unzip -t sd-handoff.zip >/dev/null)
+          fi
       - name: Write diagnostic release metadata
         run: |
           set -Eeuo pipefail
@@ -336,11 +343,48 @@ jobs:
             else
               echo 'Variant: console-beacon. Only the ramdisk differs from stock; kernel logs to serial only.'
             fi
+            if [[ -d out/sd-handoff ]]; then
+              echo
+              echo '## sd-handoff: try this BEFORE flashing again'
+              echo 'The stock environment reaches an unused channel that never writes eMMC:'
+              echo '  update -> recovery_from_sdcard -> fatload mmc 0 aml_autoscript -> autoscr'
+              echo 'So a FAT32 microSD card runs arbitrary U-Boot commands. Pull the card and the'
+              echo 'box is exactly as before, which means this is repeatable instead of one'
+              echo 'conclusion per flash.'
+              echo
+              echo 'Copy every file from sd-handoff/ to the root of a FAT32 microSD card, insert'
+              echo 'it, then power on. Two entries both reach update: hold the reset pin in the AV'
+              echo 'jack while powering on (the same toothpick entry used for USB burning), or let'
+              echo 'storeboot fall through on its own, which a box already stuck at the splash'
+              echo 'very likely already does.'
+              echo
+              echo 'Read the screen, no serial needed. The bitmaps are the stock 1920x1080'
+              echo 'bootup splash recoloured, so the whole screen changes, not a corner of it:'
+              echo '  blue screen        autoscr ran; the script channel works'
+              echo '  blue then black,'
+              echo '  then blinking      the kernel took over and the initramfs beacon is alive'
+              echo '  red screen         bootm returned; the kernel never took over'
+              echo '  black screen       autoscr ran and cleared the OSD but no bitmap loaded;'
+              echo '                     check the card is FAT32 and holds all four files'
+              echo '  ZTE splash frozen  update was never reached; try the toothpick entry'
+              echo
+              echo 'b860boot.img is byte-identical to boot.PARTITION in burn.img, so this tests'
+              echo 'the same image through a second, independent path. It is deliberately named'
+              echo 'b860boot.img rather than recovery.img: the stock recovery_from_sdcard would'
+              echo 'otherwise pick a file called recovery.img up again after autoscr and boot it'
+              echo 'a second time with wipeisb. handoff.cmd is the plain text of aml_autoscript;'
+              echo 'the build cross-checks it against mkimage byte for byte. The kit has no'
+              echo 'aml_sdc_burn.ini, because sdc_burning runs before recovery_from_sdcard and'
+              echo 'would start writing eMMC.'
+            fi
           } > out/RELEASE.md
-          (cd out && sha256sum burn.img burn.img.xz diagnostic-initramfs.cpio.gz \
+          (cd out && checksums=(burn.img burn.img.xz diagnostic-initramfs.cpio.gz \
             diagnostic-inputs-contract.json diagnostic-initramfs-contract.json \
-            diagnostic-boot-contract.json stock-bootloader-contract.json RELEASE.md \
-            > SHA256SUMS && sha256sum --check SHA256SUMS)
+            diagnostic-boot-contract.json stock-bootloader-contract.json RELEASE.md) \
+            && if [[ -f sd-handoff.zip ]]; then
+                 checksums+=(sd-handoff-contract.json sd-handoff.zip)
+               fi \
+            && sha256sum "${checksums[@]}" > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: b860-stock-kernel-diagnostic-output
@@ -352,9 +396,12 @@ jobs:
             out/diagnostic-initramfs-contract.json
             out/diagnostic-boot-contract.json
             out/stock-bootloader-contract.json
+            out/sd-handoff-contract.json
+            out/sd-handoff.zip
             out/SHA256SUMS
             out/RELEASE.md
           retention-days: 1
+          if-no-files-found: warn
 
   stock_diagnostic_publish:
     needs: stock_diagnostic_build
@@ -386,6 +433,10 @@ jobs:
             out/SHA256SUMS
             out/RELEASE.md
           )
+          # stock-control 变体不产交接盘，缺文件时不能让发布整体失败。
+          for optional in out/sd-handoff-contract.json out/sd-handoff.zip; do
+            if [[ -f "$optional" ]]; then assets+=("$optional"); fi
+          done
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft --prerelease \
             --title "$tag" --notes-file out/RELEASE.md
           for asset in "${assets[@]}"; do

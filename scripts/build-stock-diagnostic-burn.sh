@@ -69,6 +69,35 @@ else
     "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
     "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
     > "$out/diagnostic-boot-contract.json"
+
+  # 免刷机的 SD 卡交接盘，与 burn.img 一起发布：原厂 recovery_from_sdcard 会把 FAT 卡上的
+  # aml_autoscript 交给 autoscr 执行，整条路不写 eMMC，可以反复试。
+  # boot.PARTITION 直接复用成卡上的 b860boot.img —— 同一份镜像，两条独立的送入路径。
+  rm -rf "$out/sd-handoff"
+  node "$root/scripts/burn-image.mjs" sd-handoff-kit \
+    "$root/config/stock-environment.json" "$root/board-inputs/logo.PARTITION" \
+    "$package/boot.PARTITION" "$out/sd-handoff" \
+    > "$out/sd-handoff-contract.json"
+  # 用 mkimage 交叉验证自写的 uImage：两个独立实现必须逐字节一致，
+  # 头 CRC 错的脚本会被 U-Boot 静默忽略，而那正是最难与「没进 update」区分的失败。
+  command -v mkimage >/dev/null || { echo 'mkimage is required to cross-check aml_autoscript' >&2; exit 1; }
+  command -v dumpimage >/dev/null || { echo 'dumpimage is required to verify aml_autoscript' >&2; exit 1; }
+  SOURCE_DATE_EPOCH=0 mkimage -C none -A arm -T script -n b860-sd-handoff \
+    -d "$out/sd-handoff/handoff.cmd" "$tmp/mkimage-autoscript" >/dev/null
+  cmp -- "$tmp/mkimage-autoscript" "$out/sd-handoff/aml_autoscript"
+  dumpimage -T script -p 0 -o "$tmp/autoscript.payload" "$out/sd-handoff/aml_autoscript" >/dev/null
+  node "$root/scripts/extract-uboot-script-payload.mjs" \
+    "$out/sd-handoff/aml_autoscript" "$tmp/autoscript.payload" "$tmp/autoscript.cmd"
+  cmp -- "$out/sd-handoff/handoff.cmd" "$tmp/autoscript.cmd"
+  # sdc_burning 在 update 里排在 recovery_from_sdcard 之前，卡上一旦有这个文件，
+  # 烧录会抢先开始写 eMMC —— 交接盘的全部价值就是不写 eMMC。
+  # recovery.img 同理禁止：原厂在 autoscr 之后自己还会 fatload 一次这个名字并带 wipeisb 启动。
+  for forbidden in aml_sdc_burn.ini recovery.img; do
+    [[ ! -e "$out/sd-handoff/$forbidden" ]] || {
+      echo "SD handoff kit must never contain $forbidden" >&2
+      exit 1
+    }
+  done
 fi
 
 ampack="$tmp/ampack-src"

@@ -54,6 +54,8 @@ node "$root/scripts/burn-image.mjs" check-diagnostic-initramfs "$initramfs" \
 node "$root/scripts/burn-image.mjs" check-stock-bootloader \
   "$tmp/unpack/bootloader.PARTITION" "$root/config/burn-inputs.json" \
   > "$tmp/stock-bootloader-contract.json"
+contracts=(diagnostic-inputs-contract.json diagnostic-initramfs-contract.json
+  stock-bootloader-contract.json diagnostic-boot-contract.json)
 # 验证侧独立重推，不读发布的契约，再用 cmp 与发布件逐字节比对，
 # 保持与构建侧互不信任。变体经同一个环境变量传入，两侧必须得出相同结论。
 if [[ "$variant" == stock-control ]]; then
@@ -71,10 +73,44 @@ else
     "$root/board-inputs/stock-boot.PARTITION" "$tmp/unpack/boot.PARTITION" \
     "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
     > "$tmp/diagnostic-boot-contract.json"
+  contracts+=(sd-handoff-contract.json)
+  # 交接盘同样独立重推：引导镜像与 logo 都取自刚从 burn.img 解包出来的分区，
+  # 而不是构建侧的中间产物，两条路径必须落到同一批字节。
+  node "$root/scripts/burn-image.mjs" sd-handoff-kit \
+    "$root/config/stock-environment.json" "$tmp/unpack/logo.PARTITION" \
+    "$tmp/unpack/boot.PARTITION" "$tmp/sd-handoff" \
+    > "$tmp/sd-handoff-contract.json"
+  for name in handoff.cmd aml_autoscript b860boot.img b860run.bmp b860fail.bmp; do
+    [[ -s "$report_dir/sd-handoff/$name" ]] || {
+      echo "published SD handoff kit is missing $name" >&2
+      exit 1
+    }
+    cmp --silent "$report_dir/sd-handoff/$name" "$tmp/sd-handoff/$name" || {
+      echo "published SD handoff $name differs from the unpacked diagnostic image" >&2
+      exit 1
+    }
+  done
+  # recovery.img 这个名字会被原厂 recovery_from_sdcard 在 autoscr 之后带 wipeisb 再启动一次。
+  for forbidden in aml_sdc_burn.ini recovery.img; do
+    [[ ! -e "$report_dir/sd-handoff/$forbidden" ]] || {
+      echo "published SD handoff kit contains $forbidden" >&2
+      exit 1
+    }
+  done
+  dumpimage -T script -p 0 -o "$tmp/published.payload" \
+    "$report_dir/sd-handoff/aml_autoscript" >/dev/null
+  node "$root/scripts/extract-uboot-script-payload.mjs" \
+    "$report_dir/sd-handoff/aml_autoscript" "$tmp/published.payload" "$tmp/published.cmd"
+  cmp -- "$report_dir/sd-handoff/handoff.cmd" "$tmp/published.cmd"
+  # set -e 下 `grep -q ... && { exit 1; }` 在不匹配时会让整条命令返回 1 而不报错，
+  # 所以这里用 if，别把「没有 sdc_burning」写成静默通过。
+  if grep -q 'sdc_burn\|aml_sdc_burn' "$tmp/published.cmd"; then
+    echo 'SD handoff script must not trigger sdc_burning' >&2
+    exit 1
+  fi
 fi
 
-for contract in diagnostic-inputs-contract.json diagnostic-initramfs-contract.json \
-  stock-bootloader-contract.json diagnostic-boot-contract.json; do
+for contract in "${contracts[@]}"; do
   cmp --silent "$report_dir/$contract" "$tmp/$contract" || {
     echo "published $contract differs from the unpacked diagnostic image" >&2
     exit 1
