@@ -23,7 +23,6 @@ on:
         options:
           - console-beacon
           - stock-control
-          - stock-env-reset
 
 permissions:
   contents: read
@@ -321,13 +320,7 @@ jobs:
             echo 'DHCP hostname: b860-diag; HTTP status path: /index.txt.'
             echo 'DHCP fallback: 169.254.86.10/16; HTTP status port: 80.'
             echo 'The stock Android splash is intentional and only proves that stock U-Boot reached preboot.'
-            if [[ "$B860_DIAGNOSTIC_VARIANT" == stock-env-reset ]]; then
-              echo 'Variant: stock-env-reset. boot.PARTITION is a byte-identical stock copy and'
-              echo 'env.PARTITION restores the stock environment snapshot verbatim. The control'
-              echo 'experiment already proved boot.PARTITION content is irrelevant to the symptom,'
-              echo 'so the remaining suspect is upgrade_step being parked at 3, which makes the'
-              echo 'stock upgrade_check run update on every boot and never reach storeboot.'
-            elif [[ "$B860_DIAGNOSTIC_VARIANT" == stock-control ]]; then
+            if [[ "$B860_DIAGNOSTIC_VARIANT" == stock-control ]]; then
               echo 'Variant: stock-control. boot.PARTITION is a byte-identical copy of the stock'
               echo 'image; no ramdisk and no command line were changed. This is the control for'
               echo 'the experiment that separates "repacked boot is rejected" from "the boot'
@@ -346,8 +339,7 @@ jobs:
           } > out/RELEASE.md
           (cd out && sha256sum burn.img burn.img.xz diagnostic-initramfs.cpio.gz \
             diagnostic-inputs-contract.json diagnostic-initramfs-contract.json \
-            diagnostic-boot-contract.json stock-bootloader-contract.json \
-            stock-env-contract.json RELEASE.md \
+            diagnostic-boot-contract.json stock-bootloader-contract.json RELEASE.md \
             > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -360,7 +352,6 @@ jobs:
             out/diagnostic-initramfs-contract.json
             out/diagnostic-boot-contract.json
             out/stock-bootloader-contract.json
-            out/stock-env-contract.json
             out/SHA256SUMS
             out/RELEASE.md
           retention-days: 1
@@ -392,7 +383,6 @@ jobs:
             out/diagnostic-initramfs-contract.json
             out/diagnostic-boot-contract.json
             out/stock-bootloader-contract.json
-            out/stock-env-contract.json
             out/SHA256SUMS
             out/RELEASE.md
           )

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import childProcess from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -489,16 +490,39 @@ test('diagnostic build and validator agree on the variant switch', () => {
   assert.match(validator, /> "\$tmp\/diagnostic-boot-contract\.json"/u);
 });
 
-test('env reset variant is the only one allowed to ship env.PARTITION', () => {
-  const builder = fs.readFileSync(new URL('scripts/build-stock-diagnostic-burn.sh', ROOT), 'utf8');
-  const validator = fs.readFileSync(new URL('scripts/validate-stock-diagnostic-burn.sh', ROOT), 'utf8');
+test('vendor partition table has no env partition, so packages must never ship one', () => {
+  // 实机烧录日志给出了确定结论：
+  //   Download env.PARTITION -> [0x30402004] UBOOT/烧录分区 env/初始化分区/命令结果返回错误
+  // 原因是原厂分区表里根本没有 env 分区，U-Boot 环境由 rsv 内部管理。
+  // 这里直接对 board-inputs/meson1.dtb 复核，防止「写 env 复位 upgrade_step」
+  // 这类想法被再次加回来——它在这块板子上无法实现。
+  const container = fs.readFileSync(new URL('board-inputs/meson1.dtb', ROOT));
+  assert.equal(container.toString('ascii', 0, 4), 'AML_');
 
-  assert.match(builder, /stock-env-reset/u);
-  assert.match(builder, /stock-uboot-env/u);
-  assert.match(validator, /stock-env-reset/u);
-  // 其余变体必须继续禁止 env.PARTITION，否则「换了 env 才好」与「本来就会好」
-  // 无法区分，对照实验失去意义。
-  assert.match(validator, /prohibited_partitions\+=\(env\.PARTITION\)/u);
-  // 验证侧必须自己重新生成 env 再比对，不能直接信任包里的字节。
-  assert.match(validator, /cmp --silent "\$tmp\/unpack\/env\.PARTITION"/u);
+  const offsets = [];
+  for (let index = 0; index + 4 <= container.length; index += 4) {
+    if (container.readUInt32BE(index) === 0xd00dfeed) offsets.push(index);
+  }
+  assert.ok(offsets.length >= 1, 'multi-DTB container holds no FDT');
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'b860-vendor-dtb-'));
+  try {
+    for (const [index, offset] of offsets.entries()) {
+      const size = container.readUInt32BE(offset + 4);
+      const extracted = path.join(directory, `sub${index}.dtb`);
+      fs.writeFileSync(extracted, container.subarray(offset, offset + size));
+      const names = childProcess.execFileSync('fdtget', ['-l', extracted, '/partitions'], {
+        encoding: 'utf8',
+      }).trim().split(/\s+/u);
+      assert.ok(names.includes('boot'), `sub-DTB ${index} lacks a boot partition`);
+      assert.ok(!names.includes('env'), `sub-DTB ${index} unexpectedly declares an env partition`);
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+
+  const builder = shellCode(fs.readFileSync(new URL('scripts/build-stock-diagnostic-burn.sh', ROOT), 'utf8'));
+  const validator = fs.readFileSync(new URL('scripts/validate-stock-diagnostic-burn.sh', ROOT), 'utf8');
+  assert.doesNotMatch(builder, /env\.PARTITION/u);
+  assert.match(validator, /for prohibited in[\s\S]*?env\.PARTITION/u);
 });

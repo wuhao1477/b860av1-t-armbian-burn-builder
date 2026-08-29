@@ -32,19 +32,24 @@ node "$root/scripts/burn-image.mjs" check-stock-bootloader \
 # 变体选择：
 #   console-beacon   重打包 boot.PARTITION，替换 ramdisk 并写入 HDMI 控制台 cmdline
 #   stock-control    boot.PARTITION 用原厂副本逐字节不改，作为对照实验
-#   stock-env-reset   原厂 boot 副本 + 写回原厂 env 快照，复位 upgrade_step
 #
 # 对照实验已证明 boot.PARTITION 的内容与现象无关：逐字节原厂副本与三版改过
-# ramdisk 的镜像表现完全一致。因此故障点在 storeboot 之上——最可能是 env 里
-# upgrade_step 残留为 3，使 preboot 的 upgrade_check 每次开机直接 run update，
-# 而 update 会先等 USB 烧录工具，于是永远停在 splash，走不到 bootcmd。
+# ramdisk 的镜像表现完全一致。
+#
+# 曾尝试过 stock-env-reset 变体(写 env.PARTITION 复位 upgrade_step)，已证伪并移除：
+# 原厂 meson1.dtb 的 7 个 sub-DTB 分区表一律是
+#   conf logo recovery rsv tee crypt misc boot system cache data
+# 根本没有 env 分区，U-Boot 环境由 rsv 内部管理。烧录工具因此必然返回
+#   [0x30402004] UBOOT/烧录分区 env/初始化分区/命令结果返回错误
+# 该断言由 tests/stock-kernel-diagnostic.test.mjs 直接对 board-inputs/meson1.dtb
+# 复核，防止再次被加回来。
 variant=${B860_DIAGNOSTIC_VARIANT:-console-beacon}
 case "$variant" in
-  console-beacon|stock-control|stock-env-reset) ;;
+  console-beacon|stock-control) ;;
   *) echo "unknown diagnostic variant: $variant" >&2; exit 1 ;;
 esac
 
-if [[ "$variant" == stock-control || "$variant" == stock-env-reset ]]; then
+if [[ "$variant" == stock-control ]]; then
   cp -- "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION"
   node "$root/scripts/burn-image.mjs" check-stock-control-boot \
     "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
@@ -64,16 +69,6 @@ else
     "$root/board-inputs/stock-boot.PARTITION" "$package/boot.PARTITION" \
     "$initramfs" "$root/config/burn-inputs.json" "${console_cmdline[@]}" \
     > "$out/diagnostic-boot-contract.json"
-fi
-
-# 只有 stock-env-reset 变体写 env 分区；其余变体保持「不碰 env」，
-# 这样两种结果才能互相印证是不是 env 造成的。
-if [[ "$variant" == stock-env-reset ]]; then
-  node "$root/scripts/burn-image.mjs" stock-uboot-env \
-    "$root/config/stock-environment.json" "$package/env.PARTITION" \
-    > "$out/stock-env-contract.json"
-else
-  : > "$out/stock-env-contract.json"
 fi
 
 ampack="$tmp/ampack-src"
