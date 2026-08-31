@@ -71,11 +71,15 @@ function writeSparseRoot(directory) {
 }
 
 function writeFipFixture(directory, { occupyMbrArea = false } = {}) {
-  // 只需要一个「sector 0 的 446..511 为零、其余非零」的假 FIP。
+  // 假 FIP：sector 0 的 446..511 为零、其余非零，并带一份自洽的 BL2 摘要头
+  // （hash_start=0x60、hash_size=0xbf90，与本板原厂 bl2.sign 一致）。
   const fip = path.join(directory, 'bootloader.PARTITION');
-  const image = Buffer.alloc(1024, 0x5a);
+  const image = Buffer.alloc(0xc000, 0x5a);
   image.fill(0, 446, 512);
+  image.writeUInt32LE(0x60, 0x2c);
+  image.writeUInt32LE(0xbf90, 0x3c);
   if (occupyMbrArea) image[500] = 0x01;
+  chain.bl2SelfDigest(image).copy(image, 0x50);
   fs.writeFileSync(fip, image);
   return fip;
 }
@@ -92,10 +96,32 @@ test('DOS MBR is embedded in the bootloader sector 0 at the vendor boot offset',
     { index: 2, bootable: false, type: 0x83, startLba: 4_456_448, sectors: 16_384 },
   ]);
   const after = fs.readFileSync(fip);
-  // 签名的 BL2 头部（0..445）与 sector 0 之后的内容必须逐字节不变。
-  assert.deepEqual(after.subarray(0, 446), before.subarray(0, 446));
+  // 只有 66 字节 MBR 和 0x50 的自摘要变了；其余签名段逐字节不变。
+  assert.deepEqual(after.subarray(0, 0x50), before.subarray(0, 0x50));
+  assert.deepEqual(after.subarray(0x70, 446), before.subarray(0x70, 446));
   assert.deepEqual(after.subarray(512), before.subarray(512));
   assert.equal(after.length, before.length);
+  // 摘要必须跟着 MBR 一起重算，否则 bootrom 拒绝执行 BL2（实测整机全黑）。
+  assert.notDeepEqual(after.subarray(0x50, 0x70), before.subarray(0x50, 0x70));
+  assert.equal(chain.verifyBl2Seal(fip), after.subarray(0x50, 0x70).toString('hex'));
+});
+
+test('a stale BL2 integrity digest is a hard failure', (context) => {
+  const directory = fixture(context);
+  const fip = writeFipFixture(directory);
+  chain.embedDosMbr(fip, 32 * MIB, 8 * MIB);
+
+  const descriptor = fs.openSync(fip, 'r+');
+  fs.writeSync(descriptor, Buffer.alloc(32), 0, 32, 0x50);
+  fs.closeSync(descriptor);
+  assert.throws(() => chain.verifyBl2Seal(fip), /BL2 integrity digest is stale/);
+
+  const fat = path.join(directory, 'boot.PARTITION');
+  writeFatFixture(fat, directory);
+  assert.throws(
+    () => chain.validateEmmcBootChain(fip, fat, writeSparseRoot(directory)),
+    /BL2 integrity digest is stale/,
+  );
 });
 
 test('DOS MBR embedding refuses to overwrite a used MBR table area', (context) => {

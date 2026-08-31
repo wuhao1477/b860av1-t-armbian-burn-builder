@@ -27,8 +27,90 @@ const BURN_PARTITIONS = [
 ];
 export const MBR_TABLE_START = 446;
 
+// 原厂 BL2 自带完整性摘要，嵌 MBR 会破坏它，必须重算。
+// gxlimg bl2.c 的 gi_bl2_sign()：SHA-256 覆盖 [0x10,0x50) 与
+// [0x10+hash_start, +hash_size)，摘要本身存在 0x50..0x70。本板
+// hash_start=0x60、hash_size=0xbf90，即第二段是 [0x70,0xC000)——
+// 446..511 落在里面。实测原厂 0x50 处的值正是按此规则算出的
+// 195c7ea9…，而写完 MBR 后重算得到 494f89e1…，两者不等时 bootrom
+// 直接拒绝执行 BL2：整机没有串口输出、没有 HDMI、只有电源灯。
+// 0x70..0x25F 全为零说明这块板没有 RSA 签名，只有这一份摘要，
+// 所以嵌完 MBR 重算并写回是完整的修复，不需要任何厂商私钥。
+const BL2_STAGE_BYTES = 0xc000;
+const BL2_HEADER_OFFSET = 0x10;
+const BL2_HEADER_BYTES = 0x40;
+const BL2_DIGEST_OFFSET = 0x50;
+const BL2_DIGEST_BYTES = 0x20;
+const BL2_HASH_START_FIELD = 0x2c;
+const BL2_HASH_SIZE_FIELD = 0x3c;
+export const STOCK_BL2_SELF_DIGEST =
+  '195c7ea9e48dc92b1aae54cd3a0aba6b8e1f1a7052392f39f1ff52c8b2ef18d6';
+
 function fail(message) {
   throw new Error(message);
+}
+
+function readBl2Stage(bootloaderPath, flags = 'r') {
+  const image = Buffer.alloc(BL2_STAGE_BYTES);
+  const descriptor = fs.openSync(bootloaderPath, flags);
+  try {
+    if (fs.readSync(descriptor, image, 0, BL2_STAGE_BYTES, 0) !== BL2_STAGE_BYTES) {
+      fail(`${path.basename(bootloaderPath)} is shorter than the BL2 stage`);
+    }
+    return { image, descriptor };
+  } catch (error) {
+    fs.closeSync(descriptor);
+    throw error;
+  }
+}
+
+/** 按 gxlimg 的规则重算 BL2 头里的完整性摘要。 */
+export function bl2SelfDigest(image) {
+  const hashStart = image.readUInt32LE(BL2_HASH_START_FIELD);
+  const hashSize = image.readUInt32LE(BL2_HASH_SIZE_FIELD);
+  const start = BL2_HEADER_OFFSET + hashStart;
+  if (start + hashSize > image.length) fail('BL2 header describes a hash range past the stage');
+  if (start <= BL2_DIGEST_OFFSET + BL2_DIGEST_BYTES - 1 && start >= BL2_DIGEST_OFFSET) {
+    fail('BL2 hashed payload overlaps its own digest');
+  }
+  return crypto.createHash('sha256')
+    .update(image.subarray(BL2_HEADER_OFFSET, BL2_HEADER_OFFSET + BL2_HEADER_BYTES))
+    .update(image.subarray(start, start + hashSize))
+    .digest();
+}
+
+/** 嵌 MBR 之后写回重算的摘要，否则 bootrom 不执行 BL2。 */
+export function resealBl2(bootloaderPath) {
+  const { image, descriptor } = readBl2Stage(bootloaderPath, 'r+');
+  try {
+    const digest = bl2SelfDigest(image);
+    fs.writeSync(descriptor, digest, 0, BL2_DIGEST_BYTES, BL2_DIGEST_OFFSET);
+    return digest.toString('hex');
+  } finally {
+    fs.closeSync(descriptor);
+  }
+}
+
+/** 交付件必须自洽：存的摘要要等于按同一规则重算的结果。 */
+export function verifyBl2Seal(bootloaderPath) {
+  const { image, descriptor } = readBl2Stage(bootloaderPath);
+  fs.closeSync(descriptor);
+  const stored = image
+    .subarray(BL2_DIGEST_OFFSET, BL2_DIGEST_OFFSET + BL2_DIGEST_BYTES).toString('hex');
+  const computed = bl2SelfDigest(image).toString('hex');
+  if (stored !== computed) fail(`BL2 integrity digest is stale: ${stored} != ${computed}`);
+  return computed;
+}
+
+/**
+ * 出证据时把 446..511 清零、并把摘要恢复成原厂值，这样和原厂 BL2 摘要
+ * 逐字节比对仍然成立：除了 66 字节 MBR 和这份重算摘要，签名段没有改动。
+ */
+export function normalizeBl2ForEvidence(image) {
+  const copy = Buffer.from(image);
+  copy.fill(0, MBR_TABLE_START, SECTOR_BYTES);
+  Buffer.from(STOCK_BL2_SELF_DIGEST, 'hex').copy(copy, BL2_DIGEST_OFFSET);
+  return copy;
 }
 
 export function sectors(bytes, label) {
@@ -87,6 +169,7 @@ export function embedDosMbr(bootloaderPath, bootBytes, rootBytes) {
   } finally {
     fs.closeSync(descriptor);
   }
+  resealBl2(bootloaderPath);
   return inspectDosMbr(bootloaderPath);
 }
 
@@ -261,6 +344,7 @@ export function inspectBurnPackagePartitions(packageDirectory) {
 
 export function validateEmmcBootChain(bootloaderPath, fatPath, rootfsPath) {
   const mbr = inspectDosMbr(bootloaderPath);
+  verifyBl2Seal(bootloaderPath);
   const fat = inspectFatBootImage(fatPath);
   const rootfs = inspectSparseImage(rootfsPath);
   const fatContents = inspectFatBootContents(fatPath);

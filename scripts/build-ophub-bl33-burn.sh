@@ -14,8 +14,10 @@ set -Eeuo pipefail
 # 3. extlinux.conf 里的路径必须带 /boot/ 前缀。理由：cmd/pxe_utils.c 的 get_bootfile_path()
 #    对 `file_path[0]=='/' && !is_pxe` 直接返回空前缀，绝对路径按分区根解析。
 # 4. MBR 嵌在 bootloader.PARTITION 的 sector 0（446..511）。理由：armbian-install 三条写
-#    bootloader 的分支全是 `bs=1 count=444` + `bs=512 skip=1 seek=1`，444..511 不参与 BL2
-#    签名校验，且烧录工具送不到 eMMC 的 LBA 0，独立的 1.PARTITION 会被 store 拒绝。
+#    bootloader 的分支全是 `bs=1 count=444` + `bs=512 skip=1 seek=1`，且烧录工具送不到 eMMC
+#    的 LBA 0，独立的 1.PARTITION 会被 store 拒绝。注意 446..511 确实落在 BL2 自身摘要覆盖的
+#    [0x70,0xC000) 里，所以 embed-rootfs-mbr 之后必须重算并写回 0x50 的摘要，否则 bootrom
+#    拒绝执行 BL2（实测整机全黑，只有电源灯）。embedRootfsMbr() 已经内置这一步。
 #
 # 启动链：bootrom -> 原厂签名 BL2/BL30/BL301/BL31 -> ophub BL33 -> distro_bootcmd
 #         -> scan_dev_for_boot_part(mmc) -> sysboot /boot/extlinux/extlinux.conf

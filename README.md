@@ -64,7 +64,9 @@ Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必
 
 DOS MBR 嵌在 `bootloader.PARTITION` 的 sector 0（446..511），把 FAT16 映射到 eMMC 1104 MiB、把 rootfs 映射到 2176 MiB；extlinux 的 root UUID 必须与 `data.PARTITION` 完全一致。包不生成 `1.PARTITION`、`env.PARTITION` 或 `system.PARTITION`。启动路径为原厂签名 BL2/BL30/BL301/BL31 -> 主线 BL33 `distro_bootcmd` -> eMMC `mmc1` FAT16/extlinux -> Armbian kernel/initrd -> Debian rootfs。
 
-MBR 之所以嵌进 bootloader 而不是单独成一项：原厂 u-boot 的 `store` 按分区名查 `meson1.dtb` 的 `/partitions` 表，表里只有 `conf/logo/recovery/rsv/tee/crypt/misc/boot/system/cache/data`，写一个名为 `1` 的分区必然得到 `[0x30402004]UBOOT/烧录分区 1/初始化分区/命令结果返回错误`。而 `blkdevparts` 的 `4M@0(bootloader)` 说明 eMMC user 区 LBA 0 就是 bootloader 的 sector 0，原厂 FIP 在 442..511 全为零，ophub `install-aml.sh` 也正是用 `bs=1 count=442` + `bs=512 skip=1 seek=1` 刻意跳过这一段来保留 parted 写的分区表。校验 BL2 摘要时把 446..511 清零后与原厂值比对，证明签名段本身未被改动。
+MBR 之所以嵌进 bootloader 而不是单独成一项：原厂 u-boot 的 `store` 按分区名查 `meson1.dtb` 的 `/partitions` 表，表里只有 `conf/logo/recovery/rsv/tee/crypt/misc/boot/system/cache/data`，写一个名为 `1` 的分区必然得到 `[0x30402004]UBOOT/烧录分区 1/初始化分区/命令结果返回错误`。而 `blkdevparts` 的 `4M@0(bootloader)` 说明 eMMC user 区 LBA 0 就是 bootloader 的 sector 0，原厂 FIP 在 442..511 全为零，ophub `install-aml.sh` 也正是用 `bs=1 count=442` + `bs=512 skip=1 seek=1` 刻意跳过这一段来保留 parted 写的分区表。
+
+嵌完 MBR 必须重算 BL2 自身的完整性摘要。gxlimg `bl2.c` 的 `gi_bl2_sign()` 把 SHA-256 存在 BL2 的 0x50..0x70，覆盖 `[0x10,0x50)` 与 `[0x10+hash_start, +hash_size)`；本板 `hash_start=0x60`、`hash_size=0xbf90`，第二段就是 `[0x70,0xC000)`，**446..511 落在里面**。前两版直刷包没有重算这份摘要，bootrom 直接拒绝执行 BL2：实测整机没有 HDMI、没有串口输出、RJ45 无 link，只有电源灯亮。BL2 的 0x70..0x25F 全为零说明这块板没有 RSA 签名段，只有这一份摘要，所以重算并写回 0x50 是完整修复，不需要任何厂商私钥。出证据时把 446..511 清零、把 0x50 恢复成原厂摘要 `195c7ea9…` 后再比对原厂 BL2 的 `0ed67a2e…`，证明除这 66 字节 MBR 与重算摘要以外签名段未被改动；同时校验交付件里存的摘要与内容自洽。
 
 每周直刷工作流只在最新公开 Armbian 输入或直刷配方变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS`、`emmc-boot-contract.json`、`mainline-fip-contract.json`、`rootfs-contract.json` 和 schema 4 `burn-report.json`。独立步骤会重新解包 Amlogic v2 容器，解密 BL33，并重算 FAT16/extlinux、FIP 组件、root UUID 和 8 GB eMMC 容量证据。下载时优先使用 `burn.img.xz`，解压后导入 Amlogic USB Burning Tool。
 
@@ -82,7 +84,7 @@ raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。�
 
 `extlinux.conf` 里的路径必须带 `/boot/` 前缀：`cmd/pxe_utils.c` 的 `get_bootfile_path()` 对 `file_path[0] == '/' && !is_pxe` 直接返回空前缀，绝对路径按分区根解析。同一份 `/boot/boot.scr`（`mkimage -T script`）作二级兜底，extlinux 失败后 U-Boot 会在同一 prefix 下找它。`/etc/fstab` 的 `LABEL=BOOT` vfat 行必须删除，否则 systemd 会卡在 `local-fs.target`。
 
-启动路径：bootrom -> 原厂签名 BL2/BL30/BL301/BL31 -> ophub BL33 -> `distro_bootcmd` -> `scan_dev_for_boot_part(mmc)` -> `sysboot /boot/extlinux/extlinux.conf` -> `booti zImage + uInitrd + p212 DTB` -> Debian rootfs。BL2 摘要按 446..511 清零后与原厂 `0ed67a2e…` 精确一致，证明签名段未被改动。**非原厂 BL33 能否在这块板上执行仍未验证**，这一点两个变体都一样。
+启动路径：bootrom -> 原厂签名 BL2/BL30/BL301/BL31 -> ophub BL33 -> `distro_bootcmd` -> `scan_dev_for_boot_part(mmc)` -> `sysboot /boot/extlinux/extlinux.conf` -> `booti zImage + uInitrd + p212 DTB` -> Debian rootfs。BL2 摘要按 446..511 清零、0x50 还原成原厂 `195c7ea9…` 后与原厂 `0ed67a2e…` 精确一致，证明签名段未被改动。**非原厂 BL33 能否在这块板上执行仍未验证**，这一点两个变体都一样。
 
 ## 静态验证
 

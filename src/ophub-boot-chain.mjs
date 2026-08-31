@@ -8,8 +8,11 @@ import path from 'node:path';
 import { inspectSparseImage, readSparseExt4Uuid } from './android-sparse.mjs';
 import {
   MBR_TABLE_START,
+  normalizeBl2ForEvidence,
   readSector0,
+  resealBl2,
   sectors,
+  verifyBl2Seal,
   writePartition,
 } from './emmc-boot-chain.mjs';
 
@@ -48,6 +51,8 @@ function normalizeUuid(value, label) {
  * 0..445 是原厂签名 BL2 头，逐字节保留；烧录工具送不到 eMMC 的 LBA 0，
  * 独立的 1.PARTITION 会被 store 按分区名拒掉。
  * 分区项标成 bootable，distro_bootcmd 的 `part list -bootable` 才直接命中。
+ * 446..511 落在 BL2 自身摘要覆盖的范围里，写完必须 resealBl2() 重算，
+ * 否则 bootrom 拒绝执行 BL2，整机连电源灯以外什么都没有。
  */
 export function embedRootfsMbr(bootloaderPath, rootBytes) {
   const rootSectors = sectors(rootBytes, 'ext4 root image');
@@ -65,6 +70,7 @@ export function embedRootfsMbr(bootloaderPath, rootBytes) {
   } finally {
     fs.closeSync(descriptor);
   }
+  resealBl2(bootloaderPath);
   return inspectRootfsMbr(bootloaderPath);
 }
 
@@ -186,15 +192,16 @@ function componentEvidence(directory, name) {
 }
 
 /**
- * BL2 从 FIP 偏移 0 开始，嵌 MBR 改了它的 446..511。清零那 66 字节后
- * 必须精确还原原厂摘要 —— 这就是签名段未被改动的证据。
+ * BL2 从 FIP 偏移 0 开始，嵌 MBR 改了它的 446..511，也逼着 0x50 的自摘要
+ * 重算。清零那 66 字节、把摘要还原成原厂那份之后必须精确等于原厂 BL2 摘要
+ * —— 这就是除 MBR 与重算摘要之外签名段未被改动的证据。
  */
 function signedStageEvidence(directory) {
-  const bl2 = fs.readFileSync(path.join(directory, 'bl2.sign'));
-  const masked = Buffer.from(bl2);
-  masked.fill(0, MBR_TABLE_START, SECTOR_BYTES);
+  const bl2Path = path.join(directory, 'bl2.sign');
+  verifyBl2Seal(bl2Path);
+  const bl2 = fs.readFileSync(bl2Path);
   const evidence = {
-    bl2: { size: bl2.length, sha256: digest(masked) },
+    bl2: { size: bl2.length, sha256: digest(normalizeBl2ForEvidence(bl2)) },
     bl30: componentEvidence(directory, 'bl30.enc'),
     bl301: componentEvidence(directory, 'bl301.enc'),
     bl31: componentEvidence(directory, 'bl31.enc'),

@@ -5,6 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import * as chain from '../src/ophub-boot-chain.mjs';
+import { bl2SelfDigest, verifyBl2Seal } from '../src/emmc-boot-chain.mjs';
 
 const MIB = 1024 * 1024;
 const SECTOR = 512;
@@ -22,6 +23,10 @@ function stubFip(directory) {
   const filePath = path.join(directory, 'bootloader.PARTITION');
   const image = Buffer.alloc(4 * MIB);
   image.fill(0xa5, 0, 446);
+  // 自洽的 BL2 摘要头：hash_start=0x60、hash_size=0xbf90，同原厂 bl2.sign。
+  image.writeUInt32LE(0x60, 0x2c);
+  image.writeUInt32LE(0xbf90, 0x3c);
+  bl2SelfDigest(image).copy(image, 0x50);
   fs.writeFileSync(filePath, image);
   return filePath;
 }
@@ -49,6 +54,7 @@ function writeConfig(directory, overrides = {}) {
 test('embeds one bootable ext4 partition at the data offset and keeps BL2 intact', (context) => {
   const directory = scratch(context);
   const filePath = stubFip(directory);
+  const before = fs.readFileSync(filePath);
   const inspected = chain.embedRootfsMbr(filePath, ROOT_BYTES);
   assert.equal(inspected.partitions.length, 1);
   assert.deepEqual(inspected.partitions[0], {
@@ -58,9 +64,14 @@ test('embeds one bootable ext4 partition at the data offset and keeps BL2 intact
     startLba: (2176 * MIB) / SECTOR,
     sectors: ROOT_BYTES / SECTOR,
   });
-  const sector = fs.readFileSync(filePath).subarray(0, SECTOR);
-  assert.ok(sector.subarray(0, 446).every((byte) => byte === 0xa5), 'BL2 header must survive');
-  assert.equal(sector.readUInt16LE(510), 0xaa55);
+  const after = fs.readFileSync(filePath);
+  // 只有 66 字节 MBR 和 0x50 的自摘要变了；其余 BL2 头逐字节保留。
+  assert.deepEqual(after.subarray(0, 0x50), before.subarray(0, 0x50));
+  assert.deepEqual(after.subarray(0x70, 446), before.subarray(0x70, 446));
+  assert.equal(after.readUInt16LE(510), 0xaa55);
+  // 摘要必须重算，否则 bootrom 拒绝执行 BL2（两次实刷都是整机全黑）。
+  assert.equal(verifyBl2Seal(filePath), after.subarray(0x50, 0x70).toString('hex'));
+  assert.notDeepEqual(after.subarray(0x50, 0x70), before.subarray(0x50, 0x70));
   assert.deepEqual(chain.inspectRootfsMbr(filePath), inspected);
 });
 

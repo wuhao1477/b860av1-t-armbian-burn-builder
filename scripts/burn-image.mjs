@@ -17,7 +17,9 @@ import {
   inspectDosMbr,
   inspectFatBootImage,
   inspectFatBootFiles,
+  resealBl2,
   validateEmmcBootChain,
+  verifyBl2Seal,
   embedDosMbr,
 } from '../src/emmc-boot-chain.mjs';
 
@@ -25,11 +27,15 @@ export { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-spars
 export { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-roles.mjs';
 export { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
 export {
+  bl2SelfDigest,
   inspectBurnPackagePartitions,
   inspectDosMbr,
   inspectFatBootImage,
   inspectFatBootFiles,
+  normalizeBl2ForEvidence,
+  resealBl2,
   validateEmmcBootChain,
+  verifyBl2Seal,
   embedDosMbr,
 } from '../src/emmc-boot-chain.mjs';
 import {
@@ -353,6 +359,8 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'check-dos-mbr' && args.length === 1) console.log(JSON.stringify(
     inspectDosMbr(args[0]),
   ));
+  else if (command === 'reseal-bl2' && args.length === 1) console.log(resealBl2(args[0]));
+  else if (command === 'check-bl2-seal' && args.length === 1) console.log(verifyBl2Seal(args[0]));
   else if (command === 'check-fat-boot' && args.length === 1) console.log(JSON.stringify(
     inspectFatBootImage(args[0]),
   ));
@@ -387,5 +395,5 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   else if (command === 'check-ophub-chain' && args.length === 4) console.log(JSON.stringify(
     validateOphubBootChain(...args), null, 2,
   ));
-  else fail('usage: burn-image.mjs check-extlinux-rootfs conf root-uuid board-dtb | embed-rootfs-mbr bootloader root-bytes | check-rootfs-mbr bootloader | check-ophub-partitions package-dir | check-ophub-chain bootloader sparse-root components-dir raw-bl33 | embed-dos-mbr bootloader fat-bytes root-bytes | check-emmc-chain bootloader fat sparse-root | check-burn-partitions package-dir | check-burn-dtb-roles vendor-dtb linux-dtb | check-dos-mbr bootloader | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | check-report report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else fail('usage: burn-image.mjs reseal-bl2 bootloader | check-bl2-seal bootloader | check-extlinux-rootfs conf root-uuid board-dtb | embed-rootfs-mbr bootloader root-bytes | check-rootfs-mbr bootloader | check-ophub-partitions package-dir | check-ophub-chain bootloader sparse-root components-dir raw-bl33 | embed-dos-mbr bootloader fat-bytes root-bytes | check-emmc-chain bootloader fat sparse-root | check-burn-partitions package-dir | check-burn-dtb-roles vendor-dtb linux-dtb | check-dos-mbr bootloader | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | check-report report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

@@ -4,6 +4,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 
 import {
+  normalizeBl2ForEvidence,
+  verifyBl2Seal,
+} from '../src/emmc-boot-chain.mjs';
+import {
   createExtlinuxConfig,
   validateMainlineFipEvidence,
 } from '../src/mainline-boot-contract.mjs';
@@ -77,15 +81,18 @@ function componentEvidence(directory, name) {
 /**
  * BL2 从 FIP 偏移 0 开始，所以它的 sector 0 就是 eMMC 的 LBA 0，
  * 446..511 由 DOS MBR 分区表占用（见 emmc-boot-chain.mjs 的 embedDosMbr）。
- * 比对原厂 BL2 摘要时把这 66 字节清零，只证明签名段本身没被改动。
+ * 那 66 字节落在 BL2 自身摘要覆盖的 [0x70,0xC000) 里，嵌完必须重算摘要，
+ * 否则 bootrom 不执行 BL2。比对原厂值时把 MBR 清零、摘要恢复成原厂那份，
+ * 只证明签名段本身没被改动；同时校验交付的摘要与内容自洽。
  */
 function bl2Evidence(directory) {
-  const image = fs.readFileSync(`${directory}/bl2.sign`);
-  const masked = Buffer.from(image);
-  masked.fill(0, 446, 512);
+  const filePath = `${directory}/bl2.sign`;
+  verifyBl2Seal(filePath);
+  const image = fs.readFileSync(filePath);
   return {
     size: image.length,
-    sha256: crypto.createHash('sha256').update(masked).digest('hex'),
+    sha256: crypto.createHash('sha256')
+      .update(normalizeBl2ForEvidence(image)).digest('hex'),
   };
 }
 
