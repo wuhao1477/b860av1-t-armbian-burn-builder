@@ -117,21 +117,31 @@ node "$root/scripts/burn-image.mjs" sparse \
   exit 1
 }
 
+# FIP 证据在下面嵌完 MBR 后才写，这里不复制 build-mainline-uboot.sh 的中间版本。
 "$root/scripts/build-mainline-uboot.sh" "$tmp/mainline-uboot"
 cp -- "$tmp/mainline-uboot/bootloader.PARTITION" "$package/bootloader.PARTITION"
-cp -- "$tmp/mainline-uboot/mainline-fip-contract.json" "$out/mainline-fip-contract.json"
-cp -- "$tmp/mainline-uboot/u-boot-build.json" "$out/u-boot-build.json"
 for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf meson1.dtb; do
   expected=$(node -e "console.log(JSON.parse(require('fs').readFileSync('$root/config/burn-inputs.json')).files['$name'])")
   printf '%s  %s\n' "$expected" "$root/board-inputs/$name" | sha256sum --check --status
   cp -- "$root/board-inputs/$name" "$package/$name"
 done
-node "$root/scripts/burn-image.mjs" dos-mbr \
-  "$package/1.PARTITION" "$fat_bytes" "$root_size" >/dev/null
+# MBR 嵌进 bootloader.PARTITION 的 sector 0（446..511）。store 只认
+# meson1.dtb /partitions 里的分区名，没有 "1"，独立的 1.PARTITION 必然被拒。
+chmod u+w -- "$package/bootloader.PARTITION"
+node "$root/scripts/burn-image.mjs" embed-dos-mbr \
+  "$package/bootloader.PARTITION" "$fat_bytes" "$root_size" >/dev/null
 node "$root/scripts/burn-image.mjs" check-burn-partitions "$package" >/dev/null
 node "$root/scripts/burn-image.mjs" check-emmc-chain \
-  "$package/1.PARTITION" "$package/boot.PARTITION" "$package/data.PARTITION" \
+  "$package/bootloader.PARTITION" "$package/boot.PARTITION" "$package/data.PARTITION" \
   > "$out/emmc-boot-contract.json"
+# 嵌 MBR 改了 FIP 的字节，证据必须按最终交付的那份重算，否则独立校验会
+# 发现 published mainline-fip-contract.json 与解包结果不一致。BL2 摘要在
+# fip-evidence 里按 446..511 清零后比对，仍能证明签名段未被改动。
+node "$root/scripts/mainline-boot.mjs" fip-evidence \
+  "$package/bootloader.PARTITION" "$tmp/mainline-uboot/components" \
+  "$tmp/mainline-uboot/u-boot.raw.bin" > "$out/mainline-fip-contract.json"
+jq --arg fipSha256 "$(sha256sum "$package/bootloader.PARTITION" | awk '{print $1}')" \
+  '.fipSha256 = $fipSha256' "$tmp/mainline-uboot/u-boot-build.json" > "$out/u-boot-build.json"
 
 mapfile -t capacity < <(node -e '
   const board = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"));

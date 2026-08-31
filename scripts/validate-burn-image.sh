@@ -39,10 +39,12 @@ ampack="$ampack_src/target/release/ampack"
 "$ampack" unpack "$image" "$tmp/unpack" >/dev/null
 
 for name in DDR.USB UBOOT.USB aml_sdc_burn.UBOOT aml_sdc_burn.ini platform.conf \
-  1.PARTITION bootloader.PARTITION boot.PARTITION data.PARTITION meson1.dtb; do
+  bootloader.PARTITION boot.PARTITION data.PARTITION meson1.dtb; do
   [[ -s "$tmp/unpack/$name" ]] || { echo "missing $name" >&2; exit 1; }
 done
-for name in env.PARTITION system.PARTITION vendor.PARTITION recovery.PARTITION \
+# 1.PARTITION 一并禁掉：store 按 meson1.dtb 的分区名查表，没有 "1" 这一项，
+# 烧录会停在 [0x30402004]UBOOT/烧录分区 1/初始化分区/命令结果返回错误。
+for name in 1.PARTITION env.PARTITION system.PARTITION vendor.PARTITION recovery.PARTITION \
   cache.PARTITION logo.PARTITION crypt.PARTITION misc.PARTITION; do
   [[ ! -e "$tmp/unpack/$name" ]] || {
     echo "prohibited Android partition payload: $name" >&2
@@ -57,7 +59,7 @@ done
 
 root_uuid=$(node "$root/scripts/burn-image.mjs" sparse-ext4-uuid "$tmp/unpack/data.PARTITION")
 node "$root/scripts/burn-image.mjs" check-emmc-chain \
-  "$tmp/unpack/1.PARTITION" "$tmp/unpack/boot.PARTITION" \
+  "$tmp/unpack/bootloader.PARTITION" "$tmp/unpack/boot.PARTITION" \
   "$tmp/unpack/data.PARTITION" > "$tmp/emmc-boot-contract.json"
 [[ "$(node -e "console.log(JSON.parse(require('fs').readFileSync('$tmp/emmc-boot-contract.json')).rootUuid)")" == "$root_uuid" ]] || {
   echo 'eMMC boot contract UUID differs from data.PARTITION' >&2

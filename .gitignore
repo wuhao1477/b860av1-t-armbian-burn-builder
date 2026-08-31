@@ -2,6 +2,9 @@ node_modules/
 out/
 tmp/
 artifacts/
+# 参考固件与上游镜像：体积大、非仓库产物，只作分析输入。
+Downloads/
+*.rar
 resolved-sources.json
 validation-report.json
 SHA256SUMS

@@ -70,16 +70,42 @@ function writeSparseRoot(directory) {
   return sparse;
 }
 
-test('DOS MBR maps a 32 MiB FAT16 boot filesystem at the vendor boot offset', (context) => {
+function writeFipFixture(directory, { occupyMbrArea = false } = {}) {
+  // 只需要一个「sector 0 的 446..511 为零、其余非零」的假 FIP。
+  const fip = path.join(directory, 'bootloader.PARTITION');
+  const image = Buffer.alloc(1024, 0x5a);
+  image.fill(0, 446, 512);
+  if (occupyMbrArea) image[500] = 0x01;
+  fs.writeFileSync(fip, image);
+  return fip;
+}
+
+test('DOS MBR is embedded in the bootloader sector 0 at the vendor boot offset', (context) => {
   const directory = fixture(context);
-  const output = path.join(directory, '1.PARTITION');
+  const fip = writeFipFixture(directory);
+  const before = fs.readFileSync(fip);
 
-  chain.writeDosMbr(output, 32 * MIB, 8 * MIB);
+  chain.embedDosMbr(fip, 32 * MIB, 8 * MIB);
 
-  assert.deepEqual(chain.inspectDosMbr(output).partitions, [
+  assert.deepEqual(chain.inspectDosMbr(fip).partitions, [
     { index: 1, bootable: false, type: 0x0e, startLba: 2_260_992, sectors: 65_536 },
     { index: 2, bootable: false, type: 0x83, startLba: 4_456_448, sectors: 16_384 },
   ]);
+  const after = fs.readFileSync(fip);
+  // 签名的 BL2 头部（0..445）与 sector 0 之后的内容必须逐字节不变。
+  assert.deepEqual(after.subarray(0, 446), before.subarray(0, 446));
+  assert.deepEqual(after.subarray(512), before.subarray(512));
+  assert.equal(after.length, before.length);
+});
+
+test('DOS MBR embedding refuses to overwrite a used MBR table area', (context) => {
+  const directory = fixture(context);
+  const fip = writeFipFixture(directory, { occupyMbrArea: true });
+
+  assert.throws(
+    () => chain.embedDosMbr(fip, 32 * MIB, 8 * MIB),
+    /already uses the MBR table area/,
+  );
 });
 
 test('FAT boot inspection validates extlinux files in the fixed 32 MiB image', (context) => {
@@ -100,14 +126,14 @@ test('FAT boot inspection validates extlinux files in the fixed 32 MiB image', (
 
 test('eMMC boot contract binds MBR, extlinux and sparse rootfs by UUID', (context) => {
   const directory = fixture(context);
-  const mbr = path.join(directory, '1.PARTITION');
   const fat = path.join(directory, 'boot.PARTITION');
   const rootfs = writeSparseRoot(directory);
   writeFatFixture(fat, directory);
-  chain.writeDosMbr(mbr, 32 * MIB, 8 * MIB);
+  const fip = writeFipFixture(directory);
+  chain.embedDosMbr(fip, 32 * MIB, 8 * MIB);
 
   assert.equal(typeof chain.validateEmmcBootChain, 'function');
-  const result = chain.validateEmmcBootChain(mbr, fat, rootfs);
+  const result = chain.validateEmmcBootChain(fip, fat, rootfs);
   assert.equal(result.strategy, 'vendor-fip-mainline-bl33-extlinux');
   assert.equal(result.rootUuid, ROOT_UUID);
   assert.equal(result.fat.startMiB, 1104);
@@ -116,24 +142,23 @@ test('eMMC boot contract binds MBR, extlinux and sparse rootfs by UUID', (contex
 
 test('eMMC boot contract rejects an extlinux root UUID not present in data.PARTITION', (context) => {
   const directory = fixture(context);
-  const mbr = path.join(directory, '1.PARTITION');
   const fat = path.join(directory, 'boot.PARTITION');
   const rootfs = writeSparseRoot(directory);
   writeFatFixture(fat, directory, '11111111-2222-3333-4444-555555555555');
-  chain.writeDosMbr(mbr, 32 * MIB, 8 * MIB);
+  const fip = writeFipFixture(directory);
+  chain.embedDosMbr(fip, 32 * MIB, 8 * MIB);
 
   assert.throws(
-    () => chain.validateEmmcBootChain(mbr, fat, rootfs),
+    () => chain.validateEmmcBootChain(fip, fat, rootfs),
     /extlinux root filesystem UUID differs/,
   );
 });
 
-test('factory package contains only MBR, FIP, FAT boot and sparse root payloads', (context) => {
+test('factory package contains only FIP, FAT boot and sparse root payloads', (context) => {
   const directory = fixture(context);
   const packageDirectory = path.join(directory, 'package');
   fs.mkdirSync(packageDirectory);
   for (const name of [
-    '1.PARTITION',
     'bootloader.PARTITION',
     'boot.PARTITION',
     'data.PARTITION',
@@ -141,12 +166,19 @@ test('factory package contains only MBR, FIP, FAT boot and sparse root payloads'
 
   assert.deepEqual(chain.inspectBurnPackagePartitions(packageDirectory), {
     partitions: [
-      '1.PARTITION',
       'bootloader.PARTITION',
       'boot.PARTITION',
       'data.PARTITION',
     ],
   });
+
+  // store 按 meson1.dtb 的分区名查表，没有 "1"，这个载荷必须被拒。
+  fs.writeFileSync(path.join(packageDirectory, '1.PARTITION'), 'bogus mbr partition');
+  assert.throws(
+    () => chain.inspectBurnPackagePartitions(packageDirectory),
+    /unexpected partition payload: 1\.PARTITION/,
+  );
+  fs.rmSync(path.join(packageDirectory, '1.PARTITION'));
 
   fs.writeFileSync(path.join(packageDirectory, 'env.PARTITION'), 'vendor environment');
   assert.throws(

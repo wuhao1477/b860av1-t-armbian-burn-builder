@@ -35,9 +35,13 @@ test('public burn builder packages mainline BL33, FAT16 extlinux and sparse root
   const builder = read('scripts/build-burn-image.sh');
   const ubootBuilder = read('scripts/build-mainline-uboot.sh');
 
-  for (const payload of ['1.PARTITION', 'bootloader.PARTITION', 'boot.PARTITION', 'data.PARTITION']) {
+  for (const payload of ['bootloader.PARTITION', 'boot.PARTITION', 'data.PARTITION']) {
     assert.match(builder, new RegExp(payload.replace('.', '\\.')));
   }
+  // MBR 嵌进 bootloader 的 sector 0；名为 "1" 的分区不在 meson1.dtb 的表里，
+  // 单独写它会让烧录停在 [0x30402004] 初始化分区错误。
+  assert.match(builder, /embed-dos-mbr[\s\S]{0,120}bootloader\.PARTITION/);
+  assert.doesNotMatch(builder, /"\$package\/1\.PARTITION"/);
   assert.match(builder, /boot-components\.json/);
   assert.match(builder, /mformat/);
   assert.match(builder, /extlinux\/extlinux\.conf/);
@@ -60,12 +64,15 @@ test('public burn builder packages mainline BL33, FAT16 extlinux and sparse root
   assert.doesNotMatch(ubootBuilder, /CONFIG_BOOTCOMMAND|--set-str BOOTCOMMAND/);
 });
 
-test('independent validation unpacks the four Linux partition payloads', () => {
+test('independent validation unpacks the three Linux partition payloads', () => {
   const validator = read('scripts/validate-burn-image.sh');
 
-  for (const payload of ['1.PARTITION', 'bootloader.PARTITION', 'boot.PARTITION', 'data.PARTITION']) {
+  for (const payload of ['bootloader.PARTITION', 'boot.PARTITION', 'data.PARTITION']) {
     assert.match(validator, new RegExp(payload.replace('.', '\\.')));
   }
+  // 1.PARTITION 必须在禁止列表里，且 MBR 从 bootloader 的 sector 0 读。
+  assert.match(validator, /for name in 1\.PARTITION env\.PARTITION/);
+  assert.match(validator, /check-emmc-chain\s*\\?\s*\n?\s*"\$tmp\/unpack\/bootloader\.PARTITION"/);
   assert.match(validator, /check-emmc-chain/);
   assert.match(validator, /fip-evidence/);
   assert.match(validator, /storeboot/);

@@ -60,9 +60,11 @@ Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必
 
 当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf` 和原厂 `meson1.dtb`。持久 `bootloader.PARTITION` 保留原厂签名的 BL2/BL30/BL301/BL31，只把 Android BL33 替换为固定提交构建的 U-Boot v2026.01 R3300-L BL33；U-Boot 与 Linux DTB 的 eMMC 时钟都限制为 50 MHz。
 
-最终包只写入四个分区载荷：512 字节 DOS MBR `1.PARTITION`、主线 BL33 FIP、32 MiB FAT16 `boot.PARTITION` 和 sparse ext4 `data.PARTITION`。FAT16 分区只包含 `Image.gz`、raw `initrd.img`、B860 P212 DTB 和 `extlinux/extlinux.conf`，不包含 Android boot v0、原厂环境或 autoscript。
+最终包只写入三个分区载荷：主线 BL33 FIP `bootloader.PARTITION`、32 MiB FAT16 `boot.PARTITION` 和 sparse ext4 `data.PARTITION`。FAT16 分区只包含 `Image.gz`、raw `initrd.img`、B860 P212 DTB 和 `extlinux/extlinux.conf`，不包含 Android boot v0、原厂环境或 autoscript。
 
-`1.PARTITION` 把 FAT16 映射到 eMMC 1104 MiB、把 rootfs 映射到 2176 MiB；extlinux 的 root UUID 必须与 `data.PARTITION` 完全一致。包不生成 `env.PARTITION` 或 `system.PARTITION`。启动路径为原厂签名 BL2/BL30/BL301/BL31 -> 主线 BL33 `distro_bootcmd` -> eMMC `mmc1` FAT16/extlinux -> Armbian kernel/initrd -> Debian rootfs。
+DOS MBR 嵌在 `bootloader.PARTITION` 的 sector 0（446..511），把 FAT16 映射到 eMMC 1104 MiB、把 rootfs 映射到 2176 MiB；extlinux 的 root UUID 必须与 `data.PARTITION` 完全一致。包不生成 `1.PARTITION`、`env.PARTITION` 或 `system.PARTITION`。启动路径为原厂签名 BL2/BL30/BL301/BL31 -> 主线 BL33 `distro_bootcmd` -> eMMC `mmc1` FAT16/extlinux -> Armbian kernel/initrd -> Debian rootfs。
+
+MBR 之所以嵌进 bootloader 而不是单独成一项：原厂 u-boot 的 `store` 按分区名查 `meson1.dtb` 的 `/partitions` 表，表里只有 `conf/logo/recovery/rsv/tee/crypt/misc/boot/system/cache/data`，写一个名为 `1` 的分区必然得到 `[0x30402004]UBOOT/烧录分区 1/初始化分区/命令结果返回错误`。而 `blkdevparts` 的 `4M@0(bootloader)` 说明 eMMC user 区 LBA 0 就是 bootloader 的 sector 0，原厂 FIP 在 442..511 全为零，ophub `install-aml.sh` 也正是用 `bs=1 count=442` + `bs=512 skip=1 seek=1` 刻意跳过这一段来保留 parted 写的分区表。校验 BL2 摘要时把 446..511 清零后与原厂值比对，证明签名段本身未被改动。
 
 每周直刷工作流只在最新公开 Armbian 输入或直刷配方变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS`、`emmc-boot-contract.json`、`mainline-fip-contract.json`、`rootfs-contract.json` 和 schema 4 `burn-report.json`。独立步骤会重新解包 Amlogic v2 容器，解密 BL33，并重算 FAT16/extlinux、FIP 组件、root UUID 和 8 GB eMMC 容量证据。下载时优先使用 `burn.img.xz`，解压后导入 Amlogic USB Burning Tool。
 

@@ -74,6 +74,21 @@ function componentEvidence(directory, name) {
   return fileEvidence(`${directory}/${name}`);
 }
 
+/**
+ * BL2 从 FIP 偏移 0 开始，所以它的 sector 0 就是 eMMC 的 LBA 0，
+ * 446..511 由 DOS MBR 分区表占用（见 emmc-boot-chain.mjs 的 embedDosMbr）。
+ * 比对原厂 BL2 摘要时把这 66 字节清零，只证明签名段本身没被改动。
+ */
+function bl2Evidence(directory) {
+  const image = fs.readFileSync(`${directory}/bl2.sign`);
+  const masked = Buffer.from(image);
+  masked.fill(0, 446, 512);
+  return {
+    size: image.length,
+    sha256: crypto.createHash('sha256').update(masked).digest('hex'),
+  };
+}
+
 export function buildMainlineFipEvidence(fip, components, rawUboot) {
   return validateMainlineFipEvidence({
     schemaVersion: 1,
@@ -82,7 +97,7 @@ export function buildMainlineFipEvidence(fip, components, rawUboot) {
     fip: {
       ...fileEvidence(fip),
       components: {
-        bl2: componentEvidence(components, 'bl2.sign'),
+        bl2: bl2Evidence(components),
         bl30: componentEvidence(components, 'bl30.enc'),
         bl301: componentEvidence(components, 'bl301.enc'),
         bl31: componentEvidence(components, 'bl31.enc'),

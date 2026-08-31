@@ -12,12 +12,20 @@ const MIB = 1024 * 1024;
 const FAT_BOOT_BYTES = 32 * MIB;
 const BOOT_START_MIB = 1104;
 const ROOT_START_MIB = 2176;
+// 原厂 u-boot 的 store 按分区名查 meson1.dtb 的 /partitions 表，表里只有
+// conf/logo/recovery/rsv/tee/crypt/misc/boot/system/cache/data。曾经把 DOS MBR
+// 当成一个名为 "1" 的分区项来写，烧录工具必然报
+// [0x30402004]UBOOT/烧录分区 1/初始化分区/命令结果返回错误。
+// eMMC user 区 LBA 0 同时承载 bootloader 前 442 字节和 MBR 分区表
+// （blkdevparts 的 4M@0(bootloader)，以及 ophub install-aml.sh 用
+// bs=1 count=442 + bs=512 skip=1 seek=1 刻意跳过 442..511 的写法），
+// 所以 MBR 直接嵌进 bootloader.PARTITION 的 sector 0。
 const BURN_PARTITIONS = [
-  '1.PARTITION',
   'bootloader.PARTITION',
   'boot.PARTITION',
   'data.PARTITION',
 ];
+const MBR_TABLE_START = 446;
 
 function fail(message) {
   throw new Error(message);
@@ -31,7 +39,7 @@ function sectors(bytes, label) {
 }
 
 function writePartition(image, index, type, startLba, count) {
-  const offset = 446 + ((index - 1) * 16);
+  const offset = MBR_TABLE_START + ((index - 1) * 16);
   image[offset] = 0;
   image.fill(0xff, offset + 1, offset + 4);
   image[offset + 4] = type;
@@ -40,7 +48,24 @@ function writePartition(image, index, type, startLba, count) {
   image.writeUInt32LE(count, offset + 12);
 }
 
-export function writeDosMbr(outputPath, bootBytes, rootBytes) {
+function readSector0(imagePath) {
+  const sector = Buffer.alloc(SECTOR_BYTES);
+  const descriptor = fs.openSync(imagePath, 'r');
+  try {
+    if (fs.readSync(descriptor, sector, 0, SECTOR_BYTES, 0) !== SECTOR_BYTES) {
+      fail(`${path.basename(imagePath)} sector 0 is truncated`);
+    }
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return sector;
+}
+
+/**
+ * 把 FAT16 与 rootfs 的 DOS 分区项写进 bootloader.PARTITION 的 sector 0。
+ * 只动 446..511；0..441 是原厂签名 BL2 头，必须逐字节保留。
+ */
+export function embedDosMbr(bootloaderPath, bootBytes, rootBytes) {
   const bootSectors = sectors(bootBytes, 'FAT boot image');
   const rootSectors = sectors(rootBytes, 'ext4 root image');
   const bootStartLba = (BOOT_START_MIB * MIB) / SECTOR_BYTES;
@@ -49,22 +74,30 @@ export function writeDosMbr(outputPath, bootBytes, rootBytes) {
     fail('FAT boot image overlaps the root filesystem');
   }
   if (rootStartLba + rootSectors > 0xffffffff) fail('root filesystem exceeds DOS MBR limits');
-  const image = Buffer.alloc(SECTOR_BYTES);
-  writePartition(image, 1, 0x0e, bootStartLba, bootSectors);
-  writePartition(image, 2, 0x83, rootStartLba, rootSectors);
-  image.writeUInt16LE(0xaa55, 510);
-  fs.writeFileSync(outputPath, image);
-  return inspectDosMbr(outputPath);
+  const sector = readSector0(bootloaderPath);
+  for (let index = MBR_TABLE_START; index < SECTOR_BYTES; index += 1) {
+    if (sector[index] !== 0) fail('bootloader.PARTITION sector 0 already uses the MBR table area');
+  }
+  writePartition(sector, 1, 0x0e, bootStartLba, bootSectors);
+  writePartition(sector, 2, 0x83, rootStartLba, rootSectors);
+  sector.writeUInt16LE(0xaa55, 510);
+  const descriptor = fs.openSync(bootloaderPath, 'r+');
+  try {
+    fs.writeSync(descriptor, sector, 0, SECTOR_BYTES, 0);
+  } finally {
+    fs.closeSync(descriptor);
+  }
+  return inspectDosMbr(bootloaderPath);
 }
 
 export function inspectDosMbr(imagePath) {
-  const image = fs.readFileSync(imagePath);
-  if (image.length !== SECTOR_BYTES || image.readUInt16LE(510) !== 0xaa55) {
-    fail('1.PARTITION is not a 512-byte DOS MBR');
+  const image = readSector0(imagePath);
+  if (image.readUInt16LE(510) !== 0xaa55) {
+    fail('bootloader.PARTITION sector 0 lacks a DOS MBR signature');
   }
   const partitions = [];
   for (let index = 1; index <= 4; index += 1) {
-    const offset = 446 + ((index - 1) * 16);
+    const offset = MBR_TABLE_START + ((index - 1) * 16);
     const type = image[offset + 4];
     const sectorCount = image.readUInt32LE(offset + 12);
     if (type === 0 && sectorCount === 0) continue;
@@ -226,8 +259,8 @@ export function inspectBurnPackagePartitions(packageDirectory) {
   return { partitions: [...BURN_PARTITIONS] };
 }
 
-export function validateEmmcBootChain(mbrPath, fatPath, rootfsPath) {
-  const mbr = inspectDosMbr(mbrPath);
+export function validateEmmcBootChain(bootloaderPath, fatPath, rootfsPath) {
+  const mbr = inspectDosMbr(bootloaderPath);
   const fat = inspectFatBootImage(fatPath);
   const rootfs = inspectSparseImage(rootfsPath);
   const fatContents = inspectFatBootContents(fatPath);
