@@ -104,6 +104,29 @@ test('release notes consume the resolver board schema', () => {
   assert.match(script, /board\.profile/);
 });
 
+test('release notes state the boot procedure the shipped autoscripts actually implement', () => {
+  const notes = read('scripts/render-release-notes.mjs');
+  const installer = read('config/aml-autoscript.cmd');
+  const primary = read('config/s905-autoscript.cmd');
+
+  // 镜像的 MBR 里没有 bootloader，光写卡不会启动 —— 必须说清楚交接是怎么发生的，
+  // 否则拿到镜像的人只会以为它坏了。
+  assert.match(notes, /## How to boot this/u);
+  assert.match(notes, /recovery_from_sdcard/u);
+  assert.match(notes, /aml_autoscript/u);
+  assert.match(notes, /reset pin in the AV jack/u);
+  assert.match(notes, /armbian-install/u);
+  // 说明里点名的每一步都必须真的在仓库自己的脚本里。
+  assert.match(installer, /setenv bootcmd 'run start_autoscript'/u);
+  assert.match(installer, /s905_autoscript/u);
+  assert.match(primary, /u-boot\.ext/u);
+  assert.match(primary, /\bbooti\b/u);
+  // aml_autoscript 收尾就是 saveenv，会写一次 eMMC 上的原厂环境；
+  // 既然照实说了「不写 eMMC」以外的事，这一条必须同时出现在两边。
+  assert.match(installer, /^saveenv$/mu);
+  assert.match(notes, /saveenv/u);
+});
+
 test('weekly publication is idempotent for a forced identical fingerprint', () => {
   const workflow = read('.github/workflows/weekly-build.yml');
 
