@@ -72,6 +72,18 @@ raw Armbian 镜像仍主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd
 
 raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。直刷包则写入重打包 FIP、MBR、FAT16 boot 和 Debian/Armbian rootfs；原厂签名阶段继续负责 DDR 和安全初始化，主线 BL33 负责进入 extlinux。
 
+### 变体 B：ophub BL33 + rootfs 内的 /boot
+
+`scripts/build-ophub-bl33-burn.sh`（校验用 `scripts/validate-ophub-bl33-burn.sh`）产出第二种候选，策略标识 `vendor-fip-ophub-bl33-rootfs-extlinux`。它与上面那套的区别只有三点，每一点都由测量结果逼出来：
+
+- **BL33 用 ophub 的 `u-boot.ext`**（U-Boot 2020.07 armbian-gxl，sha256 `53c84804…`），不是自编的 v2026.01。`/etc/ophub-release` 给这块板指定的 `UBOOT_OVERLOAD` 就是它，`s905_autoscript` 用 `go 0x1000000` 链载它 —— 说明它链接在 GXL 的 BL33 入口，且这台机器上跑过。
+- **`/boot` 放进 ext4 rootfs 内部，不做 FAT16 boot 分区。** ophub 的 `zImage` 是裸 ARM64 Image（28.4 MiB）加 `uInitrd`（16.2 MiB），合计 44.6 MiB，塞不进 32 MiB 的 Amlogic `boot` 分区；`booti` 不解压 gzip，所以也不能退回 `Image.gz`。这份 U-Boot 的 `boot_prefixes='/ /boot/'` 会自己去找 `/boot/extlinux/extlinux.conf`。
+- **MBR 只描述一个分区**（bootable、type 0x83、起点 2176 MiB），仍嵌在 `bootloader.PARTITION` 的 sector 0（446..511）。包只写 `bootloader.PARTITION` 和 `data.PARTITION` 两个载荷。
+
+`extlinux.conf` 里的路径必须带 `/boot/` 前缀：`cmd/pxe_utils.c` 的 `get_bootfile_path()` 对 `file_path[0] == '/' && !is_pxe` 直接返回空前缀，绝对路径按分区根解析。同一份 `/boot/boot.scr`（`mkimage -T script`）作二级兜底，extlinux 失败后 U-Boot 会在同一 prefix 下找它。`/etc/fstab` 的 `LABEL=BOOT` vfat 行必须删除，否则 systemd 会卡在 `local-fs.target`。
+
+启动路径：bootrom -> 原厂签名 BL2/BL30/BL301/BL31 -> ophub BL33 -> `distro_bootcmd` -> `scan_dev_for_boot_part(mmc)` -> `sysboot /boot/extlinux/extlinux.conf` -> `booti zImage + uInitrd + p212 DTB` -> Debian rootfs。BL2 摘要按 446..511 清零后与原厂 `0ed67a2e…` 精确一致，证明签名段未被改动。**非原厂 BL33 能否在这块板上执行仍未验证**，这一点两个变体都一样。
+
 ## 静态验证
 
 云端构建会检查：

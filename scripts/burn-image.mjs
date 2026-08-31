@@ -32,6 +32,20 @@ export {
   validateEmmcBootChain,
   embedDosMbr,
 } from '../src/emmc-boot-chain.mjs';
+import {
+  embedRootfsMbr,
+  inspectOphubPackage,
+  inspectRootfsMbr,
+  validateOphubBootChain,
+  validateRootfsExtlinux,
+} from '../src/ophub-boot-chain.mjs';
+export {
+  embedRootfsMbr,
+  inspectOphubPackage,
+  inspectRootfsMbr,
+  validateOphubBootChain,
+  validateRootfsExtlinux,
+} from '../src/ophub-boot-chain.mjs';
 
 const BOOT_PARTITION_BYTES = 32 * 1024 * 1024;
 const STOCK_BOOTM_BYTES = 64 * 1024 * 1024;
@@ -358,5 +372,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     replaceLinuxTargetDtb(...args),
   ));
   else if (command === 'check-boot-size' && args.length === 1) console.log(assertBootPartitionSize(fs.statSync(args[0]).size));
-  else fail('usage: burn-image.mjs embed-dos-mbr bootloader fat-bytes root-bytes | check-emmc-chain bootloader fat sparse-root | check-burn-partitions package-dir | check-burn-dtb-roles vendor-dtb linux-dtb | check-dos-mbr bootloader | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | check-report report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
+  else if (command === 'check-extlinux-rootfs' && args.length === 3) console.log(JSON.stringify(
+    validateRootfsExtlinux(...args),
+  ));
+  else if (command === 'embed-rootfs-mbr' && args.length === 2) console.log(JSON.stringify(
+    embedRootfsMbr(args[0], Number(args[1])),
+  ));
+  else if (command === 'check-rootfs-mbr' && args.length === 1) console.log(JSON.stringify(
+    inspectRootfsMbr(args[0]),
+  ));
+  else if (command === 'check-ophub-partitions' && args.length === 1) console.log(JSON.stringify(
+    inspectOphubPackage(args[0]),
+  ));
+  else if (command === 'check-ophub-chain' && args.length === 4) console.log(JSON.stringify(
+    validateOphubBootChain(...args), null, 2,
+  ));
+  else fail('usage: burn-image.mjs check-extlinux-rootfs conf root-uuid board-dtb | embed-rootfs-mbr bootloader root-bytes | check-rootfs-mbr bootloader | check-ophub-partitions package-dir | check-ophub-chain bootloader sparse-root components-dir raw-bl33 | embed-dos-mbr bootloader fat-bytes root-bytes | check-emmc-chain bootloader fat sparse-root | check-burn-partitions package-dir | check-burn-dtb-roles vendor-dtb linux-dtb | check-dos-mbr bootloader | check-fat-boot fat | boot kernel initrd dtb output cmdline | command-line memory-limit-mib root-uuid | standalone-dtb input overlay output | check-stock-boot boot [root-uuid] | check-dtb-pair boot dtb | check-boot-second boot | check-standalone-dtb dtb | sparse-ext4-uuid sparse | check-sparse-capacity sparse storage-bytes data-offset-mib safety-bytes | report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | check-report report burn raw emmc-boot-contract mainline-fip-contract rootfs-contract | sparse input output length | select-kernel paths... | prepare-kernel input output | check-boot-size image');
 }

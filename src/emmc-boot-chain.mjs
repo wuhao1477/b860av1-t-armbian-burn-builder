@@ -25,20 +25,20 @@ const BURN_PARTITIONS = [
   'boot.PARTITION',
   'data.PARTITION',
 ];
-const MBR_TABLE_START = 446;
+export const MBR_TABLE_START = 446;
 
 function fail(message) {
   throw new Error(message);
 }
 
-function sectors(bytes, label) {
+export function sectors(bytes, label) {
   if (!Number.isSafeInteger(bytes) || bytes <= 0 || bytes % SECTOR_BYTES !== 0) {
     fail(`${label} size must be a positive multiple of 512 bytes`);
   }
   return bytes / SECTOR_BYTES;
 }
 
-function writePartition(image, index, type, startLba, count) {
+export function writePartition(image, index, type, startLba, count) {
   const offset = MBR_TABLE_START + ((index - 1) * 16);
   image[offset] = 0;
   image.fill(0xff, offset + 1, offset + 4);
@@ -48,7 +48,7 @@ function writePartition(image, index, type, startLba, count) {
   image.writeUInt32LE(count, offset + 12);
 }
 
-function readSector0(imagePath) {
+export function readSector0(imagePath) {
   const sector = Buffer.alloc(SECTOR_BYTES);
   const descriptor = fs.openSync(imagePath, 'r');
   try {
