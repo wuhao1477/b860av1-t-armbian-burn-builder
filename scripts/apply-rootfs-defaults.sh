@@ -40,10 +40,22 @@ sudo=${SUDO-sudo}
 # armbian-firstlogin 的触发条件就是这个文件存在（且是 tty 登录）。它会依次问
 # shell、用户名、密码、真名、locale、时区、WiFi —— 每次重刷都要重来一遍。
 # root 密码在镜像里已经是设好的 yescrypt 哈希，删掉标记不会让账号失去密码。
-if [[ -f "$root_mount/root/.not_logged_in_yet" ]]; then
-  $sudo rm -f "$root_mount/root/.not_logged_in_yet"
+#
+# 必须用 `$sudo test`，不能用 `[[ -f ]]`：rootfs 里的 /root 是 0700 root，而构建
+# 机上跑这个脚本的是普通用户，stat 不进去 —— 用 [[ -f ]] 判断在 CI 上恒为假，
+# 标记会被静默留在包里（build-45.1 就是这么漏出去的）。
+marker="$root_mount/root/.not_logged_in_yet"
+if $sudo test -f "$marker"; then
+  $sudo rm -f "$marker"
   say '已删除 /root/.not_logged_in_yet（跳过首登向导）'
+else
+  say '/root/.not_logged_in_yet 本来就不在'
 fi
+# 后置断言：静默跳过是这一条最容易犯的错，宁可让构建红。
+$sudo test ! -e "$marker" || {
+  echo 'first-login marker survived: the flashed image would still run the wizard' >&2
+  exit 1
+}
 
 # ---- 2. 钉住 root 的登录 shell ------------------------------------------
 # 用 awk 不用 sed -i：BSD sed 的 -i 要单独带备份后缀参数，同一行命令在 macOS 上

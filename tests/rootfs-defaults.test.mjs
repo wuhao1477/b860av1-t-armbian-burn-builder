@@ -48,9 +48,27 @@ test('rootfs defaults make the flashed image usable without a first-login wizard
   assert.equal(result.status, 0, result.stderr);
   // 首登向导的唯一触发条件就是这个文件。留着 = 每次重刷都要重设 shell/用户/密码。
   assert.ok(!exists(directory, 'root/.not_logged_in_yet'));
+  assert.match(result.stdout, /已删除 \/root\/\.not_logged_in_yet/);
   const passwd = fs.readFileSync(path.join(directory, 'etc/passwd'), 'utf8').split('\n');
   assert.equal(passwd[0], 'root:x:0:0:root:/root:/usr/bin/zsh');
   assert.equal(passwd[1], 'daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin', 'only root may be rewritten');
+});
+
+test('rootfs defaults fail loudly when the first-login marker survives', (context) => {
+  // rootfs 里的 /root 是 0700 root，构建机上跑脚本的是普通用户 —— 一旦回退成
+  // `[[ -f ]]` 判断，这个检查恒为假，标记会被静默留在包里（build-45.1 就是这么
+  // 漏出去的）。这里用一个「假装删了但不删」的 sudo 桩，逼后置断言必须开火。
+  const directory = fakeRootfs(context);
+  const stub = path.join(directory, 'sudo-stub');
+  fs.writeFileSync(stub, '#!/bin/sh\n[ "$1" = rm ] && exit 0\nexec "$@"\n', { mode: 0o755 });
+
+  const result = childProcess.spawnSync('bash', [script, directory], {
+    encoding: 'utf8', env: { ...process.env, SUDO: stub },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /first-login marker survived/);
+  assert.ok(exists(directory, 'root/.not_logged_in_yet'));
 });
 
 test('rootfs defaults flip the boot-time services measured on hardware', (context) => {
