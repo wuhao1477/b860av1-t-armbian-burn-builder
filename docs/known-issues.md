@@ -3,6 +3,8 @@
 实机（Armbian 26.11.0 / 5.10.268-ophub）已经能正常使用，下面是还没解决的。
 每条都带实测证据和修它需要动什么，方便接手的人直接开工。
 
+**还开着的：1、2、3、4。** 第 5、6 条已排除或已修复，保留下来是因为踩坑本身有价值。
+
 ## 1. eMMC 停在 25 MHz legacy 模式
 
 **证据**
@@ -63,16 +65,41 @@ BCM 芯片的 firmware/UART 配置在这块板上没跑通。WiFi（RTL8189FTV /
 
 ## 5. eth0 的 `carrier_changes=0`
 
-**证据**：最后一次开机 `cat /sys/class/net/eth0/carrier_changes` 是 0。之前一次开机
-eth0 完全正常（`Link is Up - 100Mbps/Full`，DHCP 拿到 `192.168.100.28`，RX 840 包 0 错误），
-说明**硬件是好的**。
+**已排除，不是缺陷。** 2026-09-01 23:47 复查：以太网整条链路都是好的，当前只是没插网线。
 
-早先「RX pair 物理损坏」的判断是错的 —— 那是我手工 `ip link set eth0 up` 加强制改
-速率造成的 PHY/MAC RMII 时钟不一致，干净重启后就恢复了。**不要在这块板上手工强制
-ethtool 速率。**
+PHY 被正确识别和绑定：
 
-**修它需要**：先确认网线是否插着。若插着仍为 0，抓 `dmesg | grep -i eth` 看 PHY 是否
-被探测到。
+```
+/sys/class/net/eth0/phydev -> .../mdio@e40908ff/ethernet-phy@8
+phy_id   0x01814400        ← 读得出来，说明 MDIO 读写正常
+driver   Meson GXL Internal PHY
+```
+
+跨开机的 link 记录（`journalctl -b -3`，2026-09-01 中午那次）：
+
+```
+12:30:08  eth0: Link is Up - 100Mbps/Full - flow control rx/tx
+12:37:55  eth0: Link is Down
+12:38:41  eth0: Link is Up - 100Mbps/Full
+12:40:52  eth0: Link is Down
+12:40:55  eth0: Link is Up - 100Mbps/Full
+          dhcp4 (eth0): state changed new lease, address=192.168.100.28
+```
+
+之后三次开机（-2 / -1 / 0）一次 link 事件都没有，当前这次已开机 10.5 小时仍是
+`NO-CARRIER`。**自协商到 100Mbps/Full 并拿到 DHCP 租约都发生过，MAC + PHY + 自协商
+全部工作正常**；反复的 up/down 正是当时插拔网线的痕迹。
+
+两个容易误判的点：
+
+- **没插线时 `ethtool eth0` 只报 `10baseT/Half 10baseT/Full`**，看起来像 PHY 少了
+  100M 能力。它实际协商到过 100Mbps/Full，所以这只是无载波状态下的寄存器读数，不用查。
+- `ethtool --cable-test` 在这块板上不可用：`PHY driver does not support cable testing`，
+  Meson GXL 内部 PHY 没实现，别指望用它判断线缆。
+
+**教训**（这条要留着）：**不要在这块板上手工 `ethtool` 强制速率。** 早先「RX pair 物理
+损坏」的判断是错的 —— 那是手工 `ip link set eth0 up` 加强制改速率造成 PHY/MAC 的 RMII
+时钟不一致，干净重启就恢复了。
 
 ## 6. CI 还在发布已证伪的变体 A
 
