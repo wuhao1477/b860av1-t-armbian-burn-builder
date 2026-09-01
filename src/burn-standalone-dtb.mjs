@@ -14,7 +14,7 @@ const HARDWARE_BINDINGS = [
   ['/soc/hdmi-tx@c883a000', 'amlogic,meson-gxl-dw-hdmi'],
 ];
 const EMMC_NODE = '/soc/apb@d0000000/mmc@74000';
-const EMMC_MAX_FREQUENCY_HZ = '50000000';
+const EMMC_MAX_FREQUENCY_HZ = '200000000';
 const PARTITIONS = [
   ['conf', '0 400000', '1'],
   ['logo', '0 2000000', '1'],
@@ -94,7 +94,7 @@ function validateHardware(dtbPath) {
     }
   }
   if (fdtget(dtbPath, EMMC_NODE, 'max-frequency') !== EMMC_MAX_FREQUENCY_HZ) {
-    fail('standalone DTB eMMC max-frequency is not 50000000');
+    fail(`standalone DTB eMMC max-frequency is not ${EMMC_MAX_FREQUENCY_HZ}`);
   }
 }
 
