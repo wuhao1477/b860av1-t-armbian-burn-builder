@@ -7,13 +7,47 @@
 
 ## 当前状态
 
-`container-valid / hardware-unverified`
+仓库有两条产出线，状态不同：
 
-公开资料表明该型号存在硬件批次差异。当前仓库绑定的原厂 BL33 明确选择 `gxl_p211_1g`，Linux 侧采用 P212 DTB、1 GB 内存和 `u-boot-s905x-s912`；该结论只适用于与仓库原厂输入摘要一致的 B860AV1.1-T 批次。
+| 产物 | 状态 | 说明 |
+|---|---|---|
+| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-01 实机刷入并正常进系统，见 [`docs/burn-image.md`](docs/burn-image.md) |
+| Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
 
-当前 DTB 是从公开 P212 修复源码构建的候选配置；虽然构建会验证 RTL8189FTV、SDIO 200 MHz、reset GPIO 与 64 MiB CMA 等关键属性，但上游根节点 model 仍是通用 P212，不能据此宣称已完成 B860AV1.1-T 实机适配。
+变体 C 实机跑到的系统：
 
-该组合尚未取得 B860AV1.1-T 完整串口启动记录。因此 Release 是候选镜像，不是已经确认可启动的正式固件。
+```
+Armbian OS 26.11.0 trixie / Debian GNU/Linux 13
+Linux 5.10.268-ophub aarch64        BOARD="B860av1-T"
+wlan0  RTL8189FTV (8189fs) 已连 AP   eth0 100Mbps/Full DHCP 正常
+HDMI   card0-HDMI-A-1 connected     根分区 /dev/mmcblk2p14 ext4
+```
+
+尚未解决的问题（eMMC 停在 25 MHz、`/boot` 为空等）列在 [`docs/known-issues.md`](docs/known-issues.md)。
+
+## 从哪读起
+
+| 文件 | 内容 |
+|---|---|
+| [`docs/burn-image.md`](docs/burn-image.md) | **直刷包的设计、三次实机全黑的根因、刷机步骤** |
+| [`docs/known-issues.md`](docs/known-issues.md) | 待解决问题，每条带证据和修它要动什么 |
+| [`docs/device-validation.md`](docs/device-validation.md) | raw 镜像那条线的实机证据采集流程 |
+| [`docs/history/`](docs/history/) | 早期设计文档，已被取代，只作溯源 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 本地怎么跑、提 PR 的要求 |
+
+```
+scripts/build-vendor-boot-burn.sh      变体 C 构建器（唯一实机验证过的）
+scripts/validate-vendor-boot-burn.sh   独立复核交付件
+scripts/setup-image-tools.sh           按 config 钉死的 commit 编 ampack / gxlimg
+scripts/burn-image.mjs                 Android boot 打包、BL2 摘要、sparse ext4 等原语
+board-inputs/                          原厂固件片段，构建的必要输入
+config/burn-inputs.json                原厂输入的 sha256 白名单
+config/stock-environment.json          厂商 U-Boot 的 81 个环境变量快照
+```
+
+公开资料表明该型号存在硬件批次差异。当前仓库绑定的原厂 BL33 明确选择 `gxl_p211_1g`，Linux 侧采用 P212 DTB、1 GB 内存；该结论只适用于与仓库原厂输入摘要一致的 B860AV1.1-T 批次。
+
+raw 镜像那条线的 DTB 是从公开 P212 修复源码构建的候选配置；虽然构建会验证 RTL8189FTV、SDIO 200 MHz、reset GPIO 与 64 MiB CMA 等关键属性，但上游根节点 model 仍是通用 P212，且没有该组合的完整启动记录，因此 raw Release 是候选镜像，不是已确认可启动的正式固件。
 
 ## 实机证据
 
@@ -32,7 +66,7 @@ gh workflow run verify-device.yml \
 
 通过后只为该 Release 增加 `operator-attested / one-device` 资产；原始 `validation-report.json` 继续保持 `container-valid / hardware-unverified`。这是单台设备的操作者证据，不是远程密码学硬件证明，也不代表所有硬件批次已经适配。
 
-公开构建同时发布 Armbian raw `.img.gz` 和 USB Burning Tool 候选 `burn.img.xz`。直刷包状态固定为 `format-valid / hardware-unverified`：容器结构和 Linux 设备树通过自动校验，但尚无该设备的串口启动证据。设备证据流程仍只针对 raw 镜像，不会把实机证明写成构建成功。
+公开构建同时发布 Armbian raw `.img.gz` 和 USB Burning Tool 的 `burn.img.xz`。CI 里的自动校验只能证明容器结构和设备树自洽；变体 C 的可启动结论来自机主实机刷入，不是构建成功推出来的。设备证据流程仍只针对 raw 镜像。
 
 ## 自动构建
 
@@ -54,37 +88,35 @@ gh workflow run verify-device.yml \
 
 手动启动：打开 [Weekly build](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/weekly-build.yml)，选择 **Run workflow**，把 `force` 设为 `true`。
 
-## burn.img 直刷候选
+## burn.img 直刷包
 
-Amlogic USB Burning Tool 的 `burn.img` 不只是 Linux 磁盘镜像。它还必须携带与具体主板 DDR、电源和安全配置匹配的 BL2/BL30/BL301、USB U-Boot 与持久 bootloader。
+完整设计、踩坑记录和刷机步骤在 [`docs/burn-image.md`](docs/burn-image.md)。这里只讲结论。
 
-当前直刷工作流保留仓库中已确认与 B860 输入包匹配的 `DDR.USB`、`UBOOT.USB`、`aml_sdc_burn.UBOOT`、`aml_sdc_burn.ini`、`platform.conf` 和原厂 `meson1.dtb`。持久 `bootloader.PARTITION` 保留原厂签名的 BL2/BL30/BL301/BL31，只把 Android BL33 替换为固定提交构建的 U-Boot v2026.01 R3300-L BL33；U-Boot 与 Linux DTB 的 eMMC 时钟都限制为 50 MHz。
+Amlogic USB Burning Tool 的 `burn.img` 不只是磁盘镜像，它还必须携带与主板 DDR、电源和安全配置匹配的 BL2/BL30/BL301、USB U-Boot 与持久 bootloader。
 
-最终包只写入三个分区载荷：主线 BL33 FIP `bootloader.PARTITION`、32 MiB FAT16 `boot.PARTITION` 和 sparse ext4 `data.PARTITION`。FAT16 分区只包含 `Image.gz`、raw `initrd.img`、B860 P212 DTB 和 `extlinux/extlinux.conf`，不包含 Android boot v0、原厂环境或 autoscript。
+**能用的是变体 C：`scripts/build-vendor-boot-burn.sh`**，策略标识 `vendor-fip-vendor-bl33-android-boot`。核心原则是**厂商 bootloader 一个字节都不改** —— 不重打包 FIP、不嵌 MBR、BL33 仍是厂商 `U-Boot 2015.01 gxl_p211_1g`。Armbian 装进 `ANDROID!` v0 boot 镜像，走厂商自己的 `storeboot` → `imgread kernel boot` → `bootm` 进来；根文件系统靠内核 cmdline 的 `blkdevparts=` 定位，不依赖 MBR。
 
-DOS MBR 嵌在 `bootloader.PARTITION` 的 sector 0（446..511），把 FAT16 映射到 eMMC 1104 MiB、把 rootfs 映射到 2176 MiB；extlinux 的 root UUID 必须与 `data.PARTITION` 完全一致。包不生成 `1.PARTITION`、`env.PARTITION` 或 `system.PARTITION`。启动路径为原厂签名 BL2/BL30/BL301/BL31 -> 主线 BL33 `distro_bootcmd` -> eMMC `mmc1` FAT16/extlinux -> Armbian kernel/initrd -> Debian rootfs。
+```
+bootrom → 原厂签名 BL2/BL30/BL301/BL31 → 厂商 BL33 → storeboot
+        → boot.PARTITION（Armbian kernel + initrd + DTB）→ Debian rootfs
+```
 
-MBR 之所以嵌进 bootloader 而不是单独成一项：原厂 u-boot 的 `store` 按分区名查 `meson1.dtb` 的 `/partitions` 表，表里只有 `conf/logo/recovery/rsv/tee/crypt/misc/boot/system/cache/data`，写一个名为 `1` 的分区必然得到 `[0x30402004]UBOOT/烧录分区 1/初始化分区/命令结果返回错误`。而 `blkdevparts` 的 `4M@0(bootloader)` 说明 eMMC user 区 LBA 0 就是 bootloader 的 sector 0，原厂 FIP 在 442..511 全为零，ophub `install-aml.sh` 也正是用 `bs=1 count=442` + `bs=512 skip=1 seek=1` 刻意跳过这一段来保留 parted 写的分区表。
+包内 5 个载荷：`bootloader.PARTITION`（原厂原样）、`boot.PARTITION`、`data.PARTITION`（sparse ext4）、`logo.PARTITION`（原厂开机图，**没有串口时唯一能判断 bootloader 是否跑起来的信号**）、`meson1.dtb`。不产 `1.PARTITION` / `env.PARTITION` / `system.PARTITION`。
 
-嵌完 MBR 必须重算 BL2 自身的完整性摘要。gxlimg `bl2.c` 的 `gi_bl2_sign()` 把 SHA-256 存在 BL2 的 0x50..0x70，覆盖 `[0x10,0x50)` 与 `[0x10+hash_start, +hash_size)`；本板 `hash_start=0x60`、`hash_size=0xbf90`，第二段就是 `[0x70,0xC000)`，**446..511 落在里面**。前两版直刷包没有重算这份摘要，bootrom 直接拒绝执行 BL2：实测整机没有 HDMI、没有串口输出、RJ45 无 link，只有电源灯亮。BL2 的 0x70..0x25F 全为零说明这块板没有 RSA 签名段，只有这一份摘要，所以重算并写回 0x50 是完整修复，不需要任何厂商私钥。出证据时把 446..511 清零、把 0x50 恢复成原厂摘要 `195c7ea9…` 后再比对原厂 BL2 的 `0ed67a2e…`，证明除这 66 字节 MBR 与重算摘要以外签名段未被改动；同时校验交付件里存的摘要与内容自洽。
+```bash
+scripts/build-vendor-boot-burn.sh <source-package-dir> <output-dir>
+scripts/validate-vendor-boot-burn.sh <output-dir>/burn.img
+```
 
-每周直刷工作流只在最新公开 Armbian 输入或直刷配方变化时运行，生成 `burn.img`、`burn.img.xz`、`SHA256SUMS`、`emmc-boot-contract.json`、`mainline-fip-contract.json`、`rootfs-contract.json` 和 schema 4 `burn-report.json`。独立步骤会重新解包 Amlogic v2 容器，解密 BL33，并重算 FAT16/extlinux、FIP 组件、root UUID 和 8 GB eMMC 容量证据。下载时优先使用 `burn.img.xz`，解压后导入 Amlogic USB Burning Tool。
+刷入时 **Burning Tool 里「擦除 flash」必须勾** —— 否则 `rsv` 里残留的 `upgrade_step=3` 会让厂商 U-Boot 每次开机都跳去等 USB 烧录，永远走不到 `bootcmd`，表现为静止在开机图。
 
-raw Armbian 镜像仍主动排除 ophub 的持久 bootloader、旧版 `u-boot.sd` 和 `u-boot.usb`，并验证 MBR 后至 4 MiB 分区起点之间没有启动链。FAT 分区只保留由固定 U-Boot 源码和补丁构建的 `u-boot-s905x-s912.bin`，以及同一字节的 `u-boot.ext`，供外部介质候选使用；它与直刷包是两条不同的启动路径。
+### 已证伪的变体 A / B
 
-raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。直刷包则写入重打包 FIP、MBR、FAT16 boot 和 Debian/Armbian rootfs；原厂签名阶段继续负责 DDR 和安全初始化，主线 BL33 负责进入 extlinux。
+两者都是「保留原厂签名段、只把 BL33 换成主线/ophub U-Boot」，实机三次全黑。根因不是 BL33 选谁，而是 **gxlimg 还原不出原厂的 AMLC 编码**：拿实机可启动的 Milton 包往返测试，`bl33.enc` 549,888 字节里 547,330 字节不同；用未改动的原厂组件重建 FIP 得到 779,264 字节（原厂 786,432），从 `0xC020` 起就对不上。重打包出来的 bootloader，原厂 BL2 拿到的是它不认的 BL33 块。
 
-### 变体 B：ophub BL33 + rootfs 内的 /boot
+脚本（`build-burn-image.sh`、`build-ophub-bl33-burn.sh` 及各自的 validator）保留在仓库里作为可复现证据，**不要基于它们开发新功能**。
 
-`scripts/build-ophub-bl33-burn.sh`（校验用 `scripts/validate-ophub-bl33-burn.sh`）产出第二种候选，策略标识 `vendor-fip-ophub-bl33-rootfs-extlinux`。它与上面那套的区别只有三点，每一点都由测量结果逼出来：
-
-- **BL33 用 ophub 的 `u-boot.ext`**（U-Boot 2020.07 armbian-gxl，sha256 `53c84804…`），不是自编的 v2026.01。`/etc/ophub-release` 给这块板指定的 `UBOOT_OVERLOAD` 就是它，`s905_autoscript` 用 `go 0x1000000` 链载它 —— 说明它链接在 GXL 的 BL33 入口，且这台机器上跑过。
-- **`/boot` 放进 ext4 rootfs 内部，不做 FAT16 boot 分区。** ophub 的 `zImage` 是裸 ARM64 Image（28.4 MiB）加 `uInitrd`（16.2 MiB），合计 44.6 MiB，塞不进 32 MiB 的 Amlogic `boot` 分区；`booti` 不解压 gzip，所以也不能退回 `Image.gz`。这份 U-Boot 的 `boot_prefixes='/ /boot/'` 会自己去找 `/boot/extlinux/extlinux.conf`。
-- **MBR 只描述一个分区**（bootable、type 0x83、起点 2176 MiB），仍嵌在 `bootloader.PARTITION` 的 sector 0（446..511）。包只写 `bootloader.PARTITION` 和 `data.PARTITION` 两个载荷。
-
-`extlinux.conf` 里的路径必须带 `/boot/` 前缀：`cmd/pxe_utils.c` 的 `get_bootfile_path()` 对 `file_path[0] == '/' && !is_pxe` 直接返回空前缀，绝对路径按分区根解析。同一份 `/boot/boot.scr`（`mkimage -T script`）作二级兜底，extlinux 失败后 U-Boot 会在同一 prefix 下找它。`/etc/fstab` 的 `LABEL=BOOT` vfat 行必须删除，否则 systemd 会卡在 `local-fs.target`。
-
-启动路径：bootrom -> 原厂签名 BL2/BL30/BL301/BL31 -> ophub BL33 -> `distro_bootcmd` -> `scan_dev_for_boot_part(mmc)` -> `sysboot /boot/extlinux/extlinux.conf` -> `booti zImage + uInitrd + p212 DTB` -> Debian rootfs。BL2 摘要按 446..511 清零、0x50 还原成原厂 `195c7ea9…` 后与原厂 `0ed67a2e…` 精确一致，证明签名段未被改动。**非原厂 BL33 能否在这块板上执行仍未验证**，这一点两个变体都一样。
+⚠️ **`weekly-burn-build.yml` 目前构建的仍然是变体 A**，产出 `burn.img` / `burn.img.xz` / `emmc-boot-contract.json` / `mainline-fip-contract.json` / `rootfs-contract.json` / `burn-report.json`。这些 Release 资产结构合法但**实机不能启动**，不要下载来刷。工作流切到变体 C 的事项记在 [`docs/known-issues.md`](docs/known-issues.md)。
 
 ## 静态验证
 
@@ -94,7 +126,7 @@ raw 镜像仍从 `config/aml-autoscript.cmd` 生成外部介质安装脚本。�
 - gzip、已清零的 MBR bootstrap、真实首分区起点、FAT boot 与 ext4 rootfs 结构正确；
 - rootfs 的 Debian major version 和代号与已验签的 stable 元数据一致，同时标识为 Armbian 并存在正常的 `/sbin/init`；
 - boot 分区包含 kernel、initrd、目标 DTB 和 source-built `u-boot-s905x-s912.bin`/`u-boot.ext` overload，活动配置实际引用 kernel、initrd 与 DTB，并在启动参数中固定保守的 `mem=1024M`（对应 `memoryLimitMiB: 1024`）；
-- 直刷包验证原厂 USB factory 文件摘要、512 字节 MBR、32 MiB FAT16、extlinux 文件集、vendor FIP 阶段、主线 BL33 的 `distro_bootcmd`/`mmc1`、root UUID 和 sparse rootfs 容量，并拒绝 Android boot v0、`env.PARTITION` 与 `system.PARTITION`；这些检查仍不能替代目标盒子的串口启动证据；
+- 直刷包（变体 C）验证原厂 USB factory 文件摘要、`bootloader.PARTITION` 与 `board-inputs/` 逐字节一致、sector 0 的 440..511 全零、BL2 摘要自洽、`ANDROID!` v0 头部可解析且 `second` 是合法 FDT、`boot.PARTITION` 不超过 32 MiB、root UUID 与 sparse rootfs 容量，并拒绝 `env.PARTITION` 与 `system.PARTITION`；这些检查证明包的结构，实机可启动结论来自机主刷入；
 - boot 分区拒绝旧版 `u-boot.sd`/`u-boot.usb` 以及未列入允许范围的 bootloader 二进制；
 - kernel 是 ARM64，DTB 必须包含精确的 `amlogic,p212` compatible 项；仅有其他 GXL/S905X compatible 的重命名 DTB 不能通过；
 - rootfs 必须包含与目标 `5.10.y-ophub` 内核 vermagic 一致的 ARM64 `8189fs.ko`，模块自身和 `modules.alias` 必须把 RTL8189FTV 的 SDIO ID `024c:F179` 映射到 `8189fs`，`modules.dep` 必须记录 `cfg80211` 与 `rfkill` 依赖；证据写入 `rtl8189fs-driver.json`；

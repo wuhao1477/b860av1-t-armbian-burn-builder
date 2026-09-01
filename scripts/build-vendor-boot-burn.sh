@@ -123,8 +123,11 @@ node -e '
   const contract = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
   fs.writeFileSync(process.argv[1], `${JSON.stringify({
     schemaVersion: 1,
-    status: "format-valid / hardware-unverified",
+    // status 说的是这一份字节流：结构自洽。strategyVerifiedOn 说的是这套做法：
+    // 已经有人拿它刷进真机并进了系统。两者不要混为一谈。
+    status: "format-valid",
     strategy: "vendor-fip-vendor-bl33-android-boot",
+    strategyVerifiedOn: "2026-09-01 B860AV1.1-T / Armbian 26.11.0 / 5.10.268-ophub",
     bootloader: "vendor byte-for-byte, no MBR, no FIP repack",
     rootUuid: process.argv[2],
     commandLine: process.argv[3],

@@ -2,6 +2,8 @@ node_modules/
 out/
 tmp/
 artifacts/
+# scripts/setup-image-tools.sh 编出来的 ampack / gxlimg。
+.tools/
 # 参考固件与上游镜像：体积大、非仓库产物，只作分析输入。
 Downloads/
 *.rar
