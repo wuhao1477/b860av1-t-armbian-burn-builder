@@ -129,8 +129,10 @@ jobs:
           PUBLIC_RELEASE: ${{ needs.detect.outputs.release_tag }}
         run: |
           set -Eeuo pipefail
-          printf 'Input fingerprint: %s\nPublic release: %s\nStrategy: vendor-fip-vendor-bl33-android-boot\nStatus: format-valid / strategy hardware-verified 2026-09-01\n\nBurning Tool 里必须勾「擦除 flash」和「擦除 bootloader」。\n' \
-            "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" > out/RELEASE.md
+          # 这是每周自动构建的 prerelease：策略与实机验证过的那份完全相同，但字节流本身
+          # 没上过机。落到这一页的人应该知道还有一份逐字节验证过的包可以下。
+          printf 'Input fingerprint: %s\nPublic release: %s\nStrategy: vendor-fip-vendor-bl33-android-boot\nStatus: format-valid / strategy hardware-verified 2026-09-01\n\n这是每周自动构建的 prerelease —— 构建策略与实机验证过的那份一致，但**这一份字节流本身没有上机测试过**。\n想要逐字节验证过的包，请下 [latest release](https://github.com/%s/releases/latest)。\n\nBurning Tool 里必须勾「擦除 flash」和「擦除 bootloader」；刷机步骤与设计说明见 [docs/burn-image.md](https://github.com/%s/blob/main/docs/burn-image.md)。\n' \
+            "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY" > out/RELEASE.md
           (cd out && sha256sum burn.img burn.img.xz vendor-boot-contract.json burn-dtb-contract.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
