@@ -9,6 +9,7 @@
     "aml_sdc_burn.ini": "e8d93f46803e26ce8457f902edd348806cbb88c8ef706deea2eb441879f0a5cc",
     "platform.conf": "89202ec0a07edd091b8aba6589bb1d40471bfde875a35dfe5a5571cb447ea701",
     "bootloader.PARTITION": "50b0fb65121e6a7e174f11f556e03d80532feccac747b4f4a646af5bde7f8ba8",
-    "meson1.dtb": "1a859e2c88057cf908cd20939dec88f93978d59a17ee2633eb3a991adf4e56e4"
+    "meson1.dtb": "1a859e2c88057cf908cd20939dec88f93978d59a17ee2633eb3a991adf4e56e4",
+    "logo.PARTITION": "2f89598bf88527ad784c102c058c2b5ed84ceb80faa4382615116ecdab62246d"
   }
 }
