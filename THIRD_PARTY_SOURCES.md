@@ -1,8 +1,19 @@
 # Third-party source availability
 
-This document accompanies every schema 8 release. The project repository is
-source-only and does not contain vendor DDR, BL2, BL30/BL301, factory U-Boot,
-Android system, recovery, APK, or Amlogic USB Burning Tool payloads.
+This document accompanies every schema 8 release and describes the **raw Armbian
+image** line. Those images are built from source and carry no vendor DDR, BL2,
+BL30/BL301, factory U-Boot, Android system, recovery, APK, or Amlogic USB
+Burning Tool payloads.
+
+The direct-flash (`burn.img`) line is different and is **not** source-only. It
+reuses the stock bootloader verbatim, so `board-inputs/` carries eight vendor
+binaries taken from the `20191218-R3300L-Q7-6.0-root-twrp-Milton` firmware:
+`DDR.USB` (the signed BL2), `UBOOT.USB`, `aml_sdc_burn.UBOOT`,
+`aml_sdc_burn.ini`, `platform.conf`, `bootloader.PARTITION` (the full vendor FIP
+with BL2/BL30/BL301/BL31/BL33), `logo.PARTITION` and `meson1.dtb`. Their SHA-256
+digests are pinned in `config/burn-inputs.json` and asserted on every build.
+Nothing in that set is built from source, and no Android system, recovery or APK
+payload is included. Rationale and measurements: [`docs/burn-image.md`](docs/burn-image.md).
 
 ## Exact release inputs
 

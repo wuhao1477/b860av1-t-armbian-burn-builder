@@ -143,7 +143,7 @@ scripts/validate-vendor-boot-burn.sh <output-dir>/burn.img
 
 这些检查只能证明 Wi-Fi 驱动已正确打包并具备自动匹配元数据，不能替代 DDR 初始化、eMMC 枚举、HDMI、以太网、Wi-Fi 连接和完整启动过程的实机测试。
 
-Ubuntu runner 镜像和 apt 包版本未逐项固定，因此本项目不承诺跨时间 bit-for-bit 可复现。U-Boot overload 来自 [U-Boot v2020.07](https://github.com/u-boot/u-boot/tree/v2020.07) 与仓库内记录的 [Armbian 补丁](patches/u-boot/u-boot-s905x-s912.patch)，每次构建和独立验证都会重新编译并比较字节摘要。当前 schema 5 不再克隆 `ophub/u-boot` 或 `ophub/firmware` 二进制仓库；Linux firmware 继承自已校验的 Armbian 基础镜像。第三方源码获取方式和无法证明的上游内核映射明确记录在 [`THIRD_PARTY_SOURCES.md`](THIRD_PARTY_SOURCES.md)。该源码链仍不包含 B860 专用 DDR、BL30/BL301 或 Amlogic USB factory-burn 组件。
+Ubuntu runner 镜像和 apt 包版本未逐项固定，因此本项目不承诺跨时间 bit-for-bit 可复现。U-Boot overload 来自 [U-Boot v2020.07](https://github.com/u-boot/u-boot/tree/v2020.07) 与仓库内记录的 [Armbian 补丁](patches/u-boot/u-boot-s905x-s912.patch)，每次构建和独立验证都会重新编译并比较字节摘要。当前 schema 5 不再克隆 `ophub/u-boot` 或 `ophub/firmware` 二进制仓库；Linux firmware 继承自已校验的 Armbian 基础镜像。第三方源码获取方式和无法证明的上游内核映射明确记录在 [`THIRD_PARTY_SOURCES.md`](THIRD_PARTY_SOURCES.md)。该源码链仍不包含 B860 专用 DDR、BL30/BL301 或 Amlogic USB factory-burn 组件 —— 直刷包那条线用的就是 `board-inputs/` 里的原厂二进制，不是从源码构建的，清单见 [`THIRD_PARTY_SOURCES.md`](THIRD_PARTY_SOURCES.md)。
 
 ## 上游
 
