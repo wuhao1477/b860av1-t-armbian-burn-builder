@@ -73,13 +73,22 @@ gh workflow run verify-device.yml \
 
 ## 自动构建
 
+下面出现两个独立编号的 schema，不要混淆：
+
+| schema | 描述的文件 | 当前版本 | 权威定义 |
+|---|---|---|---|
+| 来源清单 | `resolved-sources.json` | 5 | [`config/sources.json`](config/sources.json) |
+| 验证报告 | `validation-report.json` | 8 | `CURRENT_VALIDATION_SCHEMA`，[`src/change-detection.mjs`](src/change-detection.mjs) |
+
+门禁规则：来源清单 schema ≥ 5 时，验证报告 schema 必须正好等于 8。
+
 - 每周一 UTC 03:23 检查一次，相邻计划时间为 7 天。
 - 检测 job 从固定的 Debian 官方 HTTPS 地址下载 `stable/InRelease`，使用 Ubuntu 提供的 `debian-archive-keyring` 验签，并校验 Debian 标签、`arm64` 架构和 `main` 组件后才解析版本。
 - Debian stable 代号与 `arm64` 架构用于匹配基础镜像；完整 point version 用于版本追踪、构建指纹和 Release 标签。
 - stable 迁移时自动选择新版本；检测会拒绝 point version、发布日期或 major version 回退，同一 major 也不允许更换代号。
 - 下载、签名、元数据或匹配镜像任一检查失败时立即停止，不进入镜像构建。
-- 每次检测先审计全部公开的非草稿 `armbian-*` Release；每一份都必须是 schema 5/8 的 prerelease、源码构建 U-Boot/DTB、通过 QEMU 系统启动烟测、无 Android 扫描结果的 B860 Armbian 镜像。任一历史或不完整 Release 存在时，检测直接失败，不会继续构建。
-- schema 7 的旧公开 Release 不再满足当前发布门禁；升级后必须先删除旧 Release 和同名 tag，再运行首次 schema 8 构建。
+- 每次检测先审计全部公开的非草稿 `armbian-*` Release；每一份都必须是**来源清单 schema 5 + 验证报告 schema 8** 的 prerelease、源码构建 U-Boot/DTB、通过 QEMU 系统启动烟测、无 Android 扫描结果的 B860 Armbian 镜像。任一历史或不完整 Release 存在时，检测直接失败，不会继续构建。
+- **验证报告 schema 7** 的旧公开 Release 不再满足当前发布门禁；升级后必须先删除旧 Release 和同名 tag，再运行首次产出 schema 8 验证报告的构建。
 - 检查范围包括所有匹配 Debian stable 的公开 Armbian Release，并按 Armbian 与基础镜像内核版本全局选择最高资产；同时跟踪最新 `5.10.y` 内核、ophub 构建器提交、upstream U-Boot 源码提交和本仓库构建配方哈希。
 - 检测拒绝 Armbian、目标内核或 Debian stable 版本回退，即使手动设置 `force=true` 也不能绕过。
 - 构建配方还固定 upstream U-Boot v2020.07 的 commit、Armbian GPL 补丁 SHA-256、`libretech-cc_defconfig` 和 `aarch64-linux-gnu-` 交叉编译设置；不会把第三方预编译 U-Boot 作为最终 overload。
@@ -143,7 +152,7 @@ scripts/validate-vendor-boot-burn.sh <output-dir>/burn.img
 
 这些检查只能证明 Wi-Fi 驱动已正确打包并具备自动匹配元数据，不能替代 DDR 初始化、eMMC 枚举、HDMI、以太网、Wi-Fi 连接和完整启动过程的实机测试。
 
-Ubuntu runner 镜像和 apt 包版本未逐项固定，因此本项目不承诺跨时间 bit-for-bit 可复现。U-Boot overload 来自 [U-Boot v2020.07](https://github.com/u-boot/u-boot/tree/v2020.07) 与仓库内记录的 [Armbian 补丁](patches/u-boot/u-boot-s905x-s912.patch)，每次构建和独立验证都会重新编译并比较字节摘要。当前 schema 5 不再克隆 `ophub/u-boot` 或 `ophub/firmware` 二进制仓库；Linux firmware 继承自已校验的 Armbian 基础镜像。第三方源码获取方式和无法证明的上游内核映射明确记录在 [`THIRD_PARTY_SOURCES.md`](THIRD_PARTY_SOURCES.md)。该源码链仍不包含 B860 专用 DDR、BL30/BL301 或 Amlogic USB factory-burn 组件 —— 直刷包那条线用的就是 `board-inputs/` 里的原厂二进制，不是从源码构建的，清单见 [`THIRD_PARTY_SOURCES.md`](THIRD_PARTY_SOURCES.md)。
+Ubuntu runner 镜像和 apt 包版本未逐项固定，因此本项目不承诺跨时间 bit-for-bit 可复现。U-Boot overload 来自 [U-Boot v2020.07](https://github.com/u-boot/u-boot/tree/v2020.07) 与仓库内记录的 [Armbian 补丁](patches/u-boot/u-boot-s905x-s912.patch)，每次构建和独立验证都会重新编译并比较字节摘要。当前**来源清单 schema 5** 不再克隆 `ophub/u-boot` 或 `ophub/firmware` 二进制仓库；Linux firmware 继承自已校验的 Armbian 基础镜像。第三方源码获取方式和无法证明的上游内核映射明确记录在 [`THIRD_PARTY_SOURCES.md`](THIRD_PARTY_SOURCES.md)。该源码链仍不包含 B860 专用 DDR、BL30/BL301 或 Amlogic USB factory-burn 组件 —— 直刷包那条线用的就是 `board-inputs/` 里的原厂二进制，不是从源码构建的，清单见 [`THIRD_PARTY_SOURCES.md`](THIRD_PARTY_SOURCES.md)。
 
 ## 上游
 

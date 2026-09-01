@@ -215,3 +215,23 @@ test('burn builder creates a mainline BL33 extlinux eMMC package', () => {
     assert.match(script, /checkout --detach/);
   }
 });
+
+test('README schema table matches the authoritative schema versions', () => {
+  const readme = read('README.md');
+  const sources = JSON.parse(read('config/sources.json'));
+  const changeDetection = read('src/change-detection.mjs');
+  const currentValidation = Number(
+    /export const CURRENT_VALIDATION_SCHEMA = (\d+)/.exec(changeDetection)[1],
+  );
+
+  // README 曾经把「来源清单 schema」和「验证报告 schema」都写成 "schema N"，
+  // 读的人无从判断指的是哪一份。表格钉住两者，改了代码不改文档就会红。
+  assert.match(readme, new RegExp(`\\| 来源清单 \\| \`resolved-sources\\.json\` \\| ${sources.schemaVersion} \\|`));
+  assert.match(readme, new RegExp(`\\| 验证报告 \\| \`validation-report\\.json\` \\| ${currentValidation} \\|`));
+  assert.match(readme, new RegExp(`来源清单 schema ≥ ${sources.schemaVersion} 时，验证报告 schema 必须正好等于 ${currentValidation}`));
+  // 裸的 "schema N" 不再允许出现，前后 12 字内必须有文档限定词。
+  for (const match of readme.matchAll(/.{0,12}schema \d.{0,12}/g)) {
+    assert.match(match[0], /来源清单|验证报告|resolved-sources|validation-report|\| /,
+      `未限定的 schema 提法: ${match[0]}`);
+  }
+});
