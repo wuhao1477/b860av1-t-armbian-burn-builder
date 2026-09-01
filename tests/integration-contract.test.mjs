@@ -66,10 +66,11 @@ test('README documents raw-image and operator-attested device validation boundar
   assert.match(readme, /verify-device\.yml/);
   assert.match(readme, /operator-attested \/ one-device/);
   assert.match(readme, /container-valid \/ hardware-unverified/);
-  for (const evidence of [
-    'emmc-boot-contract.json', 'mainline-fip-contract.json',
-    'rootfs-contract.json', 'burn-report.json',
-  ]) assert.match(readme, new RegExp(evidence.replace('.', '\\.')));
+  // 发布的是变体 C，README 必须写清哪条线实机验证过、哪条没有。
+  assert.match(readme, /hardware-verified/);
+  for (const evidence of ['vendor-boot-contract.json', 'burn-dtb-contract.json']) {
+    assert.match(readme, new RegExp(evidence.replace('.', '\\.')));
+  }
 });
 
 test('raw builder writes the identity into rootfs before final sanitization', () => {

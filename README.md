@@ -1,7 +1,8 @@
 # B860AV1.1-T Armbian Builder
 
-[![CI](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/ci.yml)
-[![Weekly build](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/weekly-build.yml/badge.svg)](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/weekly-build.yml)
+[![CI](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/ci.yml/badge.svg)](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/ci.yml)
+[![Weekly burn image](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/weekly-burn-build.yml/badge.svg)](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/weekly-burn-build.yml)
+[![Weekly build](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/weekly-build.yml/badge.svg)](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/weekly-build.yml)
 
 面向中兴 `ZXV10 B860AV1.1-T` 的源输入固定、可追溯 Debian stable / Armbian 构建项目。所有大文件下载、镜像重构和 Linux 文件系统检查都在 GitHub Actions 中执行。
 
@@ -13,6 +14,8 @@
 |---|---|---|
 | **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-01 实机刷入并正常进系统，见 [`docs/burn-image.md`](docs/burn-image.md) |
 | Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
+
+直接下载：[最新实机验证的 `burn.img.xz`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)（`burn.img` sha256 `e7ee10dc…`，默认账号 `root` / `password`）。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
 变体 C 实机跑到的系统：
 
@@ -66,7 +69,7 @@ gh workflow run verify-device.yml \
 
 通过后只为该 Release 增加 `operator-attested / one-device` 资产；原始 `validation-report.json` 继续保持 `container-valid / hardware-unverified`。这是单台设备的操作者证据，不是远程密码学硬件证明，也不代表所有硬件批次已经适配。
 
-公开构建同时发布 Armbian raw `.img.gz` 和 USB Burning Tool 的 `burn.img.xz`。CI 里的自动校验只能证明容器结构和设备树自洽；变体 C 的可启动结论来自机主实机刷入，不是构建成功推出来的。设备证据流程仍只针对 raw 镜像。
+公开构建同时发布 Armbian raw `.img.gz` 和 USB Burning Tool 的 `burn.img.xz`；直刷包随附 `vendor-boot-contract.json`（Android boot 头部、cmdline、root UUID）和 `burn-dtb-contract.json`（`meson1.dtb` 的 7 个 sub-DTB 槽位与替换结果），再加一份 `SHA256SUMS`。CI 里的自动校验只能证明容器结构和设备树自洽；变体 C 的可启动结论来自机主实机刷入，不是构建成功推出来的。设备证据流程仍只针对 raw 镜像。
 
 ## 自动构建
 
@@ -114,9 +117,7 @@ scripts/validate-vendor-boot-burn.sh <output-dir>/burn.img
 
 两者都是「保留原厂签名段、只把 BL33 换成主线/ophub U-Boot」，实机三次全黑。根因不是 BL33 选谁，而是 **gxlimg 还原不出原厂的 AMLC 编码**：拿实机可启动的 Milton 包往返测试，`bl33.enc` 549,888 字节里 547,330 字节不同；用未改动的原厂组件重建 FIP 得到 779,264 字节（原厂 786,432），从 `0xC020` 起就对不上。重打包出来的 bootloader，原厂 BL2 拿到的是它不认的 BL33 块。
 
-脚本（`build-burn-image.sh`、`build-ophub-bl33-burn.sh` 及各自的 validator）保留在仓库里作为可复现证据，**不要基于它们开发新功能**。
-
-⚠️ **`weekly-burn-build.yml` 目前构建的仍然是变体 A**，产出 `burn.img` / `burn.img.xz` / `emmc-boot-contract.json` / `mainline-fip-contract.json` / `rootfs-contract.json` / `burn-report.json`。这些 Release 资产结构合法但**实机不能启动**，不要下载来刷。工作流切到变体 C 的事项记在 [`docs/known-issues.md`](docs/known-issues.md)。
+脚本（`build-burn-image.sh`、`build-ophub-bl33-burn.sh` 及各自的 validator）保留在仓库里作为可复现证据，**不要基于它们开发新功能**。此前按变体 A 发布的 17 个 `b860-burn-*` Release 已全部删除，避免有人下载来刷；`weekly-burn-build.yml` 现在只构建并发布变体 C，`tests/mainline-workflow-contract.test.mjs` 里有断言守着这一点。
 
 ## 静态验证
 
