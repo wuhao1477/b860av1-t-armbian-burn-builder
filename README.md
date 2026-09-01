@@ -12,10 +12,10 @@
 
 | 产物 | 状态 | 说明 |
 |---|---|---|
-| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-01 实机刷入并正常进系统，见 [`docs/burn-image.md`](docs/burn-image.md) |
+| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-02 实机刷入、进系统、eMMC 跑在 DDR52 82 MB/s，见 [`docs/burn-image.md`](docs/burn-image.md) |
 | Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
 
-直接下载：[最新实机验证的 `burn.img.xz`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)（`burn.img` sha256 `e7ee10dc…`，默认账号 `root` / `password`）。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
+直接下载：[最新实机验证的 `burn.img.xz`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)（`burn.img` sha256 `acdff2d3…`，默认账号 `root` / `password`）。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
 变体 C 实机跑到的系统：
 

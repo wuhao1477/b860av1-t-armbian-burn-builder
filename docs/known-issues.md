@@ -3,13 +3,27 @@
 实机（Armbian 26.11.0 / 5.10.268-ophub）已经能正常使用，下面是还没解决的。
 每条都带实测证据和修它需要动什么，方便接手的人直接开工。
 
-**还开着的：1、2、3、4。** 第 5、6 条已排除或已修复，保留下来是因为踩坑本身有价值。
+**还开着的：2、3、4、7。** 第 1、5、6 条已修复或已排除，保留下来是因为踩坑本身有价值。
 
 ## 1. eMMC 停在 25 MHz legacy 模式
 
-**HS200 在这块板上打不通（已两次实机确认），第二次尝试改走 DDR52，待实机验证。**
+**已修复并实机验证（2026-09-02）：22.4 → 82.0 MB/s，3.7 倍。**
 
-实机读数（2026-09-02，`/sys/kernel/debug/mmc2/ios`）：
+修复后读数：
+
+```
+clock 52000000 Hz   timing spec 8 (mmc DDR52)   bus width 3 (8 bits)   signal voltage 1 (1.80 V)
+hdparm -t /dev/mmcblk2 → 82.01 / 82.07 MB/sec   (两次一致)
+dd 256M oflag=direct  → 23.4 MB/s 写
+dmesg                 → "mmc2: new DDR MMC card"，mmc_select_hs200 failed 已消失
+live DTB              → mmc-hs200-1_8v 已不在属性列表里
+```
+
+下面是定位过程，留着是因为「第一次尝试」那条假设很容易再犯。
+
+### 症状
+
+修复前读数（`/sys/kernel/debug/mmc2/ios`）：
 
 ```
 clock         25000000 Hz     timing spec    0 (legacy)
@@ -31,30 +45,23 @@ mmc2: mmc_select_hs200 failed, error -74      (-74 = EBADMSG)
 
 **第一次尝试（已证伪）**：把 `max-frequency` 从 50 MHz 提到 200 MHz。刷入后实机
 `max-frequency = 200000000` 确认生效，但 **HS200 照样 `-74` 失败，仍是 legacy 25 MHz**。
-所以 50 MHz 上限不是原因 —— 这块板的 HS200 在任何时钟下都打不通。
+所以 50 MHz 上限不是原因 —— 这块板的 HS200 在任何时钟下都打不通，别再回头改这个值。
 
-**第二次尝试（待验证）**：目标改成 DDR52。卡的 `ext_csd[196] DEVICE_TYPE = 0x57`
+**第二次尝试（生效的那个）**：目标改成 DDR52。卡的 `ext_csd[196] DEVICE_TYPE = 0x57`
 解出来是 `HS26 | HS52 | DDR52-1.8V | HS200-1.8V | HS400-1.8V` —— DDR52 是支持的，
 拿不到纯粹是因为 HS200 先被尝试、失败后内核停在 legacy 不回退。
 
 于是在 `writeStandaloneDtb()` 合并 overlay 之后用 `fdtput -d` 摘掉
 `mmc-hs200-1_8v`，只留 `cap-mmc-highspeed` + `mmc-ddr-1_8v`，让
 `mmc_select_timing()` 走 `mmc_select_hs()` → `mmc_select_hs_ddr()`。
-（overlay 只能加属性不能删，所以只能在合并后删。）
+（overlay 只能加属性不能删，所以只能在合并后删。删之前先 `fdtget -p` 查一下：
+`fdtput -d` 对不存在的属性会硬报错，上游哪天不带它构建就会崩。）
 
-预期 DDR52 = 52 MHz × 8-bit DDR，理论 104 MB/s，实测一般 40–70 MB/s，
-相对现在的 22.4 MB/s 是 2–3 倍。
+`max-frequency` 保持 200 MHz —— 它不是瓶颈，DDR52 自己会把时钟停在 52 MHz。
 
-**验证方法**：刷入新包后
-
-```bash
-grep -E "clock|timing spec" /sys/kernel/debug/mmc2/ios   # 期望 timing spec 8 (mmc DDR52)
-dmesg | grep mmc2                                        # 不应再有 mmc_select_hs200 failed
-hdparm -t /dev/mmcblk2                                   # 现在 22.4 MB/s，期望 40+
-```
-
-**失败了怎么办**：最坏情况仍是 legacy 25 MHz，和现在一样，照常能开机。
-回退包是 `burn.img` sha256 `e7ee10dc…`（latest release）。
+**护栏**：`src/burn-standalone-dtb.mjs` 的 `validateHardware()` 断言
+`mmc-hs200-1_8v` 不存在、`cap-mmc-highspeed` 与 `mmc-ddr-1_8v` 存在。
+放回 `mmc-hs200-1_8v` = eMMC 掉回 22.4 MB/s，CI 会红。
 
 ## 2. `/boot` 是空的，没有内核升级路径
 
@@ -146,18 +153,20 @@ driver   Meson GXL Internal PHY
 `if: github.ref_name == github.event.repository.default_branch` —— **在 feature 分支上
 dispatch 只会跑诊断 job，产不出包**，要在默认分支上才能验证。
 
----
+## 7. 板上手改的三项修复扛不住重刷
 
-## 已做过的板上修复（重启后验证有效）
+**开着的。** 下面三项都只改了 rootfs，**没有进构建**，所以 2026-09-02 重刷 DDR52
+包之后全部回到出厂值，得手工再来一遍。
 
-不涉及启动路径，没有动 bootloader / boot 分区 / DTB / `/etc/fstab`。
+| 项 | 出厂 | 手改后 | 重刷后 |
+|---|---|---|---|
+| 根分区 | 2.9G（768000 块） | 5.1G（1,351,680 块） | 2.9G |
+| swap | 无 | zram 400 MB | 无 |
+| 开机耗时 | 41.2 s | 26.3 s（禁 `NetworkManager-wait-online.service`） | 32.5 s |
 
-| 项 | 之前 | 之后 |
-|---|---|---|
-| 根分区 | 2.9G（768000 块） | 5.1G（1,351,680 块），剩余 3.4G |
-| swap | 无 | zram 400 MB |
-| 开机耗时 | 41.2 s | 26.3 s（禁用 `NetworkManager-wait-online.service`） |
-| failed units | — | 0 |
+**修它需要**：把这三项挪进镜像 —— 根分区尺寸在
+`scripts/build-burn-payloads.sh` 生成 `data.PARTITION` 时定，zram 和禁用
+`NetworkManager-wait-online` 属于 rootfs 预置。做完就不用每次重刷都补。
 
 **`resize2fs` 要用 `setsid nohup` 脱离 SSH 跑**，否则会话一断整机卡死：
 
