@@ -19,3 +19,6 @@ SHA256SUMS
 .DS_Store
 .codegraph/
 .codebase-memory/
+
+# 本地 WiFi 预置，含明文密码，绝不进仓库（scripts/apply-rootfs-defaults.sh 读它）。
+board-inputs/wifi.env

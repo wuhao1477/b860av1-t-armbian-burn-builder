@@ -4,7 +4,7 @@ set -Eeuo pipefail
 # 从公开的 Armbian raw 镜像里做出两个直刷载荷：
 #
 #   boot.PARTITION   32 MiB FAT16，含 Image.gz / initrd.img / DTB / extlinux.conf
-#   data.PARTITION   sparse ext4 rootfs
+#   data.PARTITION   sparse ext4 rootfs（已经用 apply-rootfs-defaults.sh 预置成开箱即用）
 #
 # 这两个载荷与 bootloader 无关，变体 A（build-burn-image.sh）和变体 C
 # （build-vendor-boot-burn.sh）都用它们，所以单独成一个脚本，避免 CI 为了拿载荷
@@ -89,6 +89,7 @@ root_uuid=$(sudo blkid --match-tag UUID --output value "$root_part" | tr '[:uppe
 }
 root_size=$(sudo blockdev --getsize64 "$root_part")
 sudo sed -i '\@[[:space:]]/boot[[:space:]]@d' "$root_mount/etc/fstab" 2>/dev/null || true
+"$root/scripts/apply-rootfs-defaults.sh" "$root_mount"
 
 node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/Image.gz" >/dev/null
 cp -- "$initrd" "$tmp/initrd.img"

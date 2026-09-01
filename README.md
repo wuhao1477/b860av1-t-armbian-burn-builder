@@ -17,16 +17,31 @@
 
 直接下载：[最新实机验证的 `burn.img.xz`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)（`burn.img` sha256 `acdff2d3…`，默认账号 `root` / `password`）。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
+**刷完直接能用，没有首次开机向导。** 镜像里由
+[`scripts/apply-rootfs-defaults.sh`](scripts/apply-rootfs-defaults.sh) 预置好：
+
+| 预置项 | 值 |
+|---|---|
+| 登录 | `root` / `password`，SSH 直接进，不问 shell / 用户名 / 时区 |
+| shell | zsh 5.9 + oh-my-zsh（改 `root_shell` 一行可换 bash） |
+| 根分区 | 首次开机自动 `resize2fs` 撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G），跑完自删 |
+| swap | zram（`armbian-zram-config`） |
+| 开机 | 禁用 `NetworkManager-wait-online`，省约 6 s |
+
+WiFi 密码不进仓库（CI 产物是公开的）。要预置就在本地放 `board-inputs/wifi.env`
+写两行 `WIFI_SSID=` / `WIFI_PSK=` 再自己构建；细节见
+[`docs/known-issues.md`](docs/known-issues.md) 第 7 条。
+
 变体 C 实机跑到的系统：
 
 ```
 Armbian OS 26.11.0 trixie / Debian GNU/Linux 13
 Linux 5.10.268-ophub aarch64        BOARD="B860av1-T"
-wlan0  RTL8189FTV (8189fs) 已连 AP   eth0 100Mbps/Full DHCP 正常
-HDMI   card0-HDMI-A-1 connected     根分区 /dev/mmcblk2p14 ext4
+wlan0  RTL8189FTV (8189fs) 2.4G 20 Mbps   eth0 100Mbps/Full DHCP 正常
+HDMI   card0-HDMI-A-1 connected     eMMC DDR52 82 MB/s (/dev/mmcblk2p14 ext4)
 ```
 
-尚未解决的问题（eMMC 停在 25 MHz、`/boot` 为空等）列在 [`docs/known-issues.md`](docs/known-issues.md)。
+尚未解决的问题（`/boot` 为空、蓝牙初始化超时等）列在 [`docs/known-issues.md`](docs/known-issues.md)。
 
 ## 从哪读起
 
@@ -140,7 +155,7 @@ scripts/validate-vendor-boot-burn.sh <output-dir>/burn.img
 - boot 分区拒绝旧版 `u-boot.sd`/`u-boot.usb` 以及未列入允许范围的 bootloader 二进制；
 - kernel 是 ARM64，DTB 必须包含精确的 `amlogic,p212` compatible 项；仅有其他 GXL/S905X compatible 的重命名 DTB 不能通过；
 - rootfs 必须包含与目标 `5.10.y-ophub` 内核 vermagic 一致的 ARM64 `8189fs.ko`，模块自身和 `modules.alias` 必须把 RTL8189FTV 的 SDIO ID `024c:F179` 映射到 `8189fs`，`modules.dep` 必须记录 `cfg80211` 与 `rfkill` 依赖；证据写入 `rtl8189fs-driver.json`；
-- `config/hardware-capabilities.json` 声明的板级门禁会读取镜像内生成的 `include/config/auto.conf`，并用 `fdtget` 检查活动 DTB：eMMC（8-bit、200 MHz、HS200）、RMII 以太网、HDMI Type-A、红外 pinctrl、USB host/PHY，以及 RTL8189FTV 的 SDIO/reset 属性；所有六类结果、内核配置摘要和 DTB 摘要写入 `hardware-capabilities.json`，分别绑定 `filesystem-manifest.sha256`、`boot-components.json` 和 `rtl8189fs-driver.json`；
+- `config/hardware-capabilities.json` 声明的板级门禁会读取镜像内生成的 `include/config/auto.conf`，并用 `fdtget` 检查活动 DTB：eMMC（8-bit、200 MHz、HS200）、RMII 以太网、HDMI Type-A、红外 pinctrl、USB host/PHY，以及 RTL8189FTV 的 SDIO/reset 属性；所有六类结果、内核配置摘要和 DTB 摘要写入 `hardware-capabilities.json`，分别绑定 `filesystem-manifest.sha256`、`boot-components.json` 和 `rtl8189fs-driver.json`；**注意这里的 HS200 检查针对的是 raw 那条线的上游 DTB**——直刷包会在生成 `linux.dtb` 时主动删掉 `mmc-hs200-1_8v`，因为这块板的 HS200 协商必然 `-74` 失败且内核不回退，见 [`docs/known-issues.md`](docs/known-issues.md) 第 1 条；
 - QEMU user-mode 可以执行 rootfs 中的 shell、`dpkg-query` 包状态和 systemd 版本检查；
 - QEMU system-mode 使用镜像内同一 ARM64 kernel、initramfs 和 ext4 rootfs 启动到 `/bin/sh`，确认 Debian/Armbian 身份和真实根挂载；结果与控制台日志分别写入 `qemu-system-smoke.json` 和 `qemu-system-smoke.log`；
 - SSH unit 与 `sshd` 存在，rootfs 标签正确，镜像不超过十进制 8 GB 容量减 128 MiB 安全余量，即 `7,865,782,272` 字节；

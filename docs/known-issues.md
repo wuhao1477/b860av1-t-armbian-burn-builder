@@ -155,20 +155,44 @@ dispatch 只会跑诊断 job，产不出包**，要在默认分支上才能验�
 
 ## 7. 板上手改的三项修复扛不住重刷
 
-**开着的。** 下面三项都只改了 rootfs，**没有进构建**，所以 2026-09-02 重刷 DDR52
-包之后全部回到出厂值，得手工再来一遍。
+**已修复，待实机验证。** 这三项之前只改了 rootfs、没进构建，2026-09-02 重刷 DDR52
+包之后全部回到出厂值。现在由 `scripts/apply-rootfs-defaults.sh` 在
+`build-burn-payloads.sh` 里（rootfs 还 rw 挂着的时候）写进镜像。
 
-| 项 | 出厂 | 手改后 | 重刷后 |
+| 项 | 出厂 | 重刷后（修复前） | 现在进包的做法 |
 |---|---|---|---|
-| 根分区 | 2.9G（768000 块） | 5.1G（1,351,680 块） | 2.9G |
-| swap | 无 | zram 400 MB | 无 |
-| 开机耗时 | 41.2 s | 26.3 s（禁 `NetworkManager-wait-online.service`） | 32.5 s |
+| 根分区 | 2.9G | 2.9G | `b860-expand-rootfs.service` 首次开机跑 `resize2fs`，然后自删 |
+| swap | 无 | 无 | 启用 `armbian-zram-config.service` |
+| 开机耗时 | 41.2 s | 32.5 s | 禁用 `NetworkManager-wait-online.service`（实测省 6 s） |
+| 首登向导 | 每次重刷都问 shell/用户/密码/locale | 同左 | 删 `/root/.not_logged_in_yet` |
+| root shell | zsh（上游默认） | 同左 | 在 `/etc/passwd` 里钉死 `/usr/bin/zsh` |
 
-**修它需要**：把这三项挪进镜像 —— 根分区尺寸在
-`scripts/build-burn-payloads.sh` 生成 `data.PARTITION` 时定，zram 和禁用
-`NetworkManager-wait-online` 属于 rootfs 预置。做完就不用每次重刷都补。
+**为什么不用 Armbian 自带的 `armbian-resize-filesystem`**：它先用 `parted` 重算分区
+边界，而这块板的分区表来自 DTB 的 `/partitions`（Amlogic 私有格式）：
 
-**`resize2fs` 要用 `setsid nohup` 脱离 SSH 跑**，否则会话一断整机卡死：
+```
+# parted /dev/mmcblk2 unit s print -sm
+Error: /dev/mmcblk2: unrecognised disk label
+```
+
+脚本会在找 `partstart` 时 `return 1`。也不需要它做的事 —— `data` 在 DTB 里是
+`ffffffff`（吃掉剩余全部空间），实机上 `p14` 已经有 **5,536,481,280 B（5.15 GiB）**，
+缺的只是把 3,020,029,952 B（2.81 GiB）的 ext4 撑到分区大小。所以自带的那份必须保持
+关闭，`apply-rootfs-defaults.sh` 里有一条断言盯着它。
+
+**WiFi 凭据不进仓库。** 仓库和 CI 产物都是公开的。想让刷完就自动连网，在本地放一个
+`board-inputs/wifi.env`（已 gitignore）：
+
+```
+WIFI_SSID=你的网络
+WIFI_PSK=你的密码
+```
+
+只有本地构建会读它。CI 上没有这个文件，公开发布的包里不含任何凭据 ——
+`tests/rootfs-defaults.test.mjs` 有一条断言盯着。
+
+**`resize2fs` 要用 `setsid nohup` 脱离 SSH 跑**（手工补救时才需要，进包的那份是
+systemd 起的，不受影响），否则会话一断整机卡死：
 
 ```bash
 setsid nohup resize2fs /dev/mmcblk2p14 > /var/log/b860-resize.log 2>&1 < /dev/null &

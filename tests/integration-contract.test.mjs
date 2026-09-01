@@ -173,6 +173,10 @@ test('burn builder creates a mainline BL33 extlinux eMMC package', () => {
   const payloads = read('scripts/build-burn-payloads.sh');
   const validator = read('scripts/validate-burn-image.sh');
   assert.match(payloads, /blkid --match-tag UUID --output value \"\$root_part\"/);
+  // rootfs 预置必须在 rootfs 还挂着、还没做成 sparse 之前跑，否则改动进不了包。
+  const defaults = payloads.indexOf('apply-rootfs-defaults.sh');
+  assert.notEqual(defaults, -1, 'payload builder does not apply the rootfs defaults');
+  assert.ok(defaults < payloads.indexOf('umount "$root_mount"'));
   assert.match(validator, /sparse-ext4-uuid/);
   for (const payload of [
     'boot.PARTITION', 'data.PARTITION', 'bootloader.PARTITION', 'meson1.dtb',
