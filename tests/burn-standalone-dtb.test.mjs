@@ -70,6 +70,14 @@ test('standalone DTB CLI emits an unpadded P211 FDT with the stock partition tab
   assert.match(fdtget(output, '/soc/apb@d0000000/mmc@74000', 'compatible'), /meson-gx-mmc/);
   assert.match(fdtget(output, '/soc/hdmi-tx@c883a000', 'compatible'), /meson-gxl-dw-hdmi/);
   assert.equal(fdtget(output, '/soc/apb@d0000000/mmc@74000', 'max-frequency'), '200000000');
+  // HS200 在这块板上必然 -74 失败，且内核不回退，会停在 legacy 25 MHz。
+  // 必须把这条能力摘掉才能落到 DDR52；另外两条是 DDR52 的前提，不能一起删掉。
+  const emmcProperties = childProcess.execFileSync(
+    'fdtget', ['-p', output, '/soc/apb@d0000000/mmc@74000'], { encoding: 'utf8' },
+  ).trim().split(/\s+/u);
+  assert.ok(!emmcProperties.includes('mmc-hs200-1_8v'), 'mmc-hs200-1_8v must be removed');
+  assert.ok(emmcProperties.includes('cap-mmc-highspeed'));
+  assert.ok(emmcProperties.includes('mmc-ddr-1_8v'));
   const symbols = childProcess.spawnSync('fdtget', ['-l', output, '/__symbols__'], {
     encoding: 'utf8',
   });

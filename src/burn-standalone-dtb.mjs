@@ -13,8 +13,8 @@ const HARDWARE_BINDINGS = [
   ['/soc/apb@d0000000/mmc@74000', 'amlogic,meson-gx-mmc'],
   ['/soc/hdmi-tx@c883a000', 'amlogic,meson-gxl-dw-hdmi'],
 ];
-const EMMC_NODE = '/soc/apb@d0000000/mmc@74000';
-const EMMC_MAX_FREQUENCY_HZ = '200000000';
+export const EMMC_NODE = '/soc/apb@d0000000/mmc@74000';
+export const EMMC_MAX_FREQUENCY_HZ = '200000000';
 const PARTITIONS = [
   ['conf', '0 400000', '1'],
   ['logo', '0 2000000', '1'],
@@ -38,6 +38,17 @@ const INHERENT_PARTITIONS = [
 
 function fail(message) {
   throw new Error(message);
+}
+
+function fdtProperties(dtbPath, node) {
+  try {
+    return childProcess.execFileSync('fdtget', ['-p', dtbPath, node], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim().split(/\s+/u);
+  } catch {
+    return fail(`standalone DTB node is missing: ${node}`);
+  }
 }
 
 function fdtget(dtbPath, node, property, type) {
@@ -95,6 +106,16 @@ function validateHardware(dtbPath) {
   }
   if (fdtget(dtbPath, EMMC_NODE, 'max-frequency') !== EMMC_MAX_FREQUENCY_HZ) {
     fail(`standalone DTB eMMC max-frequency is not ${EMMC_MAX_FREQUENCY_HZ}`);
+  }
+  // HS200 在这块板上必然失败（-74），且失败后内核不回退，直接停在 legacy 25 MHz。
+  // 摘掉这条能力才能拿到 DDR52。放回来 = eMMC 掉回 22.4 MB/s。
+  if (fdtProperties(dtbPath, EMMC_NODE).includes('mmc-hs200-1_8v')) {
+    fail('standalone DTB eMMC must not advertise mmc-hs200-1_8v');
+  }
+  for (const required of ['cap-mmc-highspeed', 'mmc-ddr-1_8v']) {
+    if (!fdtProperties(dtbPath, EMMC_NODE).includes(required)) {
+      fail(`standalone DTB eMMC is missing ${required}`);
+    }
   }
 }
 

@@ -10,7 +10,7 @@ import { gunzipSync, gzipSync } from 'node:zlib';
 import { readSparseExt4Uuid, validateSparseCapacity } from '../src/android-sparse.mjs';
 import { replaceLinuxTargetDtb, validateBurnDtbRoles } from '../src/burn-dtb-roles.mjs';
 import { buildBurnReport, validateBurnReport } from '../src/burn-report.mjs';
-import { validateStandaloneDtb } from '../src/burn-standalone-dtb.mjs';
+import { EMMC_NODE, validateStandaloneDtb } from '../src/burn-standalone-dtb.mjs';
 import { validateDirectBootContract } from '../src/direct-boot-contract.mjs';
 import {
   inspectBurnPackagePartitions,
@@ -104,6 +104,23 @@ export function writeStandaloneDtb(inputPath, overlayPath, outputPath) {
     }).trim().split(/\r?\n/u);
     if (rootNodes.includes('__symbols__')) {
       childProcess.execFileSync('fdtput', ['-r', mergedDtb, '/__symbols__']);
+    }
+    // 这块板的 eMMC 打不通 HS200：卡（东芝 008G70，DEVICE_TYPE 0x57）和主机都声明支持，
+    // 但切换被卡拒绝 —— mmc_select_hs200 failed, error -74 (EBADMSG)。50 MHz 和 200 MHz
+    // 两次实机都一样。而内核 mmc_select_timing() 碰到 EBADMSG 是「不报错、直接
+    // goto bus_speed」，既不重试也不退到 HS52，结果卡在 legacy 25 MHz、22.4 MB/s。
+    // 所以这里主动摘掉 mmc-hs200-1_8v，让它走 cap-mmc-highspeed + mmc-ddr-1_8v
+    // 选到 DDR52。overlay 只能加属性不能删，只好在合并后用 fdtput -d 删。
+    // 先查再删：fdtput -d 对不存在的属性会直接报错，上游哪天不带它构建就会崩。
+    let emmcProperties = [];
+    try {
+      emmcProperties = childProcess.execFileSync('fdtget', ['-p', mergedDtb, EMMC_NODE], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }).trim().split(/\s+/u);
+    } catch { emmcProperties = []; }
+    if (emmcProperties.includes('mmc-hs200-1_8v')) {
+      childProcess.execFileSync('fdtput', ['-d', mergedDtb, EMMC_NODE, 'mmc-hs200-1_8v']);
     }
     childProcess.execFileSync(
       'dtc',

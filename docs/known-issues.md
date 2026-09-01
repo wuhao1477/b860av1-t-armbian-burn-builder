@@ -7,7 +7,7 @@
 
 ## 1. eMMC 停在 25 MHz legacy 模式
 
-**根因已定位，修复待实机验证。**
+**HS200 在这块板上打不通（已两次实机确认），第二次尝试改走 DDR52，待实机验证。**
 
 实机读数（2026-09-02，`/sys/kernel/debug/mmc2/ios`）：
 
@@ -15,41 +15,46 @@
 clock         25000000 Hz     timing spec    0 (legacy)
 bus width     3 (8 bits)      signal voltage 1 (1.80 V)
 卡            Toshiba 008G70 (manfid 0x11) 7.28 GiB
-hdparm -t /dev/mmcblk2 → 22.4 MB/sec        (HS200 应有 ~150 MB/s)
+hdparm -t /dev/mmcblk2 → 22.4 MB/sec
 ```
 
 DTB 里能力其实都声明了 —— `cap-mmc-highspeed`、`mmc-ddr-1_8v`、`mmc-hs200-1_8v`
-全在，信号电压也已经切到 1.8 V。**唯一的问题是 `max-frequency = 50000000`**：
+全在，信号电压也已经切到 1.8 V。卡住的是 HS200 协商本身：
 
 ```
-HS200 需要跑到 100/200 MHz 做 tuning，被压到 50 MHz 后 tuning 失败：
-  mmc2: mmc_select_hs200 failed, error -74      (-74 = EBADMSG)
+mmc2: mmc_select_hs200 failed, error -74      (-74 = EBADMSG)
 
 内核 mmc_select_timing() 对 EBADMSG 的处理是「不返回错误、直接 goto bus_speed」，
 既不重试也不退到 HS52 —— 于是卡停在 legacy，时钟 25 MHz。
-所以「掉到 legacy」不是驱动 bug，是这个上限逼出来的必然结果。
+所以「掉到 legacy」不是驱动 bug，是 HS200 失败后不回退的必然结果。
 ```
 
-这个 50 MHz 是 2026-08-09 变体 A 时期加的保守值（commit `5857ae0`），**从未在实机上
-验证过，而变体 A 本身根本没启动成功**。上游 Armbian 对同一 SoC 用的是 200 MHz
-（`config/hardware-capabilities.json` 就是这么断言的）。变体 C 走厂商 U-Boot，
-U-Boot 侧那个 `b860-emmc-50mhz.patch` 也已经不在启动路径里。
+**第一次尝试（已证伪）**：把 `max-frequency` 从 50 MHz 提到 200 MHz。刷入后实机
+`max-frequency = 200000000` 确认生效，但 **HS200 照样 `-74` 失败，仍是 legacy 25 MHz**。
+所以 50 MHz 上限不是原因 —— 这块板的 HS200 在任何时钟下都打不通。
 
-**已做的修改**：`board-overlays/burn-partitions.dtso` 的 `max-frequency` 改成
-`200000000`，`src/burn-standalone-dtb.mjs` 与对应测试同步。
+**第二次尝试（待验证）**：目标改成 DDR52。卡的 `ext_csd[196] DEVICE_TYPE = 0x57`
+解出来是 `HS26 | HS52 | DDR52-1.8V | HS200-1.8V | HS400-1.8V` —— DDR52 是支持的，
+拿不到纯粹是因为 HS200 先被尝试、失败后内核停在 legacy 不回退。
+
+于是在 `writeStandaloneDtb()` 合并 overlay 之后用 `fdtput -d` 摘掉
+`mmc-hs200-1_8v`，只留 `cap-mmc-highspeed` + `mmc-ddr-1_8v`，让
+`mmc_select_timing()` 走 `mmc_select_hs()` → `mmc_select_hs_ddr()`。
+（overlay 只能加属性不能删，所以只能在合并后删。）
+
+预期 DDR52 = 52 MHz × 8-bit DDR，理论 104 MB/s，实测一般 40–70 MB/s，
+相对现在的 22.4 MB/s 是 2–3 倍。
 
 **验证方法**：刷入新包后
 
 ```bash
-grep -E "clock|timing spec" /sys/kernel/debug/mmc2/ios     # 期望 timing spec 2 (hs200)
-dmesg | grep mmc2                                          # 不应再有 mmc_select_hs200 failed
-hdparm -t /dev/mmcblk2                                     # 期望 100+ MB/s
+grep -E "clock|timing spec" /sys/kernel/debug/mmc2/ios   # 期望 timing spec 8 (mmc DDR52)
+dmesg | grep mmc2                                        # 不应再有 mmc_select_hs200 failed
+hdparm -t /dev/mmcblk2                                   # 现在 22.4 MB/s，期望 40+
 ```
 
-**失败了怎么办**：tuning 再失败仍是 `-74` → legacy 25 MHz，**与现在完全一样，不会更差，
-照常能开机**。真正要盯的是「tuning 勉强通过但时序不稳」，所以刷完先跑一次大文件读写
-校验再当日常用。回退包是 `burn.img` sha256 `e7ee10dc…`（当前这个已验证能跑的系统）。
-若 200 MHz 不稳，下一档试 `100000000`。
+**失败了怎么办**：最坏情况仍是 legacy 25 MHz，和现在一样，照常能开机。
+回退包是 `burn.img` sha256 `e7ee10dc…`（latest release）。
 
 ## 2. `/boot` 是空的，没有内核升级路径
 
