@@ -51,15 +51,13 @@ jobs:
             .github/workflows/weekly-burn-build.yml \
             board-inputs/DDR.USB board-inputs/UBOOT.USB board-inputs/aml_sdc_burn.UBOOT \
             board-inputs/aml_sdc_burn.ini board-inputs/platform.conf board-inputs/bootloader.PARTITION \
-            board-inputs/meson1.dtb \
+            board-inputs/logo.PARTITION board-inputs/meson1.dtb \
             config/board.json config/burn-inputs.json config/burn-tooling.json \
             config/mainline-boot.json board-overlays/burn-partitions.dtso \
-            patches/u-boot/v2026.01/add-board-bestv-r3300-l.patch \
-            patches/u-boot/v2026.01/b860-emmc-50mhz.patch \
-            scripts/build-burn-image.sh scripts/build-mainline-uboot.sh scripts/burn-image.mjs \
-            scripts/mainline-boot.mjs \
-            scripts/validate-burn-image.sh src/android-sparse.mjs src/burn-report.mjs \
-            src/emmc-boot-chain.mjs src/mainline-boot-contract.mjs \
+            scripts/build-burn-payloads.sh scripts/build-vendor-boot-burn.sh \
+            scripts/validate-vendor-boot-burn.sh scripts/setup-image-tools.sh \
+            scripts/burn-image.mjs scripts/mainline-boot.mjs \
+            src/android-sparse.mjs src/burn-dtb-roles.mjs src/emmc-boot-chain.mjs \
             | sha256sum | awk '{print $1}')
           fingerprint=$(printf '%s\n%s\n%s\n%s\n' "$release_tag" "$asset_name" "$asset_digest" "$recipe_digest" | sha256sum | awk '{print $1}')
           previous=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 50 --json tagName,isDraft,isPrerelease --jq '[.[] | select(.isDraft == false and .isPrerelease == true and (.tagName | startswith("b860-burn-")))] | first | .tagName // empty')
@@ -93,6 +91,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           toolchain: stable
+      - name: Build pinned ampack and gxlimg
+        run: |
+          set -Eeuo pipefail
+          scripts/setup-image-tools.sh >/dev/null
+          echo "$PWD/.tools/bin" >> "$GITHUB_PATH"
       - name: Download and validate public Armbian release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,10 +109,12 @@ jobs:
           printf '%s  %s\n' "$DIGEST" "source-assets/$NAME" | sha256sum --check --status
           manifest_fingerprint=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).fingerprint)' source-assets/resolved-sources.json)
           node scripts/validate-candidate-artifacts.mjs source-assets "$manifest_fingerprint"
-      - name: Build Amlogic v2 burn image
-        run: scripts/build-burn-image.sh "source-assets/${{ needs.detect.outputs.asset_name }}" out
+      - name: Build boot and rootfs payloads
+        run: scripts/build-burn-payloads.sh "source-assets/${{ needs.detect.outputs.asset_name }}" payloads
+      - name: Build vendor-bootloader burn image
+        run: scripts/build-vendor-boot-burn.sh payloads out
       - name: Independently validate container
-        run: scripts/validate-burn-image.sh out/burn.img out/burn-report.json "source-assets/${{ needs.detect.outputs.asset_name }}"
+        run: scripts/validate-vendor-boot-burn.sh out/burn.img out/vendor-boot-contract.json
       - name: Create and verify xz download asset
         run: |
           set -Eeuo pipefail
@@ -124,9 +129,9 @@ jobs:
           PUBLIC_RELEASE: ${{ needs.detect.outputs.release_tag }}
         run: |
           set -Eeuo pipefail
-          printf 'Input fingerprint: %s\nPublic release: %s\nStatus: format-valid / hardware-unverified\n' \
+          printf 'Input fingerprint: %s\nPublic release: %s\nStrategy: vendor-fip-vendor-bl33-android-boot\nStatus: format-valid / strategy hardware-verified 2026-09-01\n\nBurning Tool 里必须勾「擦除 flash」和「擦除 bootloader」。\n' \
             "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" > out/RELEASE.md
-          (cd out && sha256sum burn.img burn.img.xz emmc-boot-contract.json mainline-fip-contract.json rootfs-contract.json u-boot-build.json burn-report.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
+          (cd out && sha256sum burn.img burn.img.xz vendor-boot-contract.json burn-dtb-contract.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: b860-burn-output
@@ -134,11 +139,8 @@ jobs:
             out/burn.img
             out/burn.img.xz
             out/SHA256SUMS
-            out/emmc-boot-contract.json
-            out/mainline-fip-contract.json
-            out/rootfs-contract.json
-            out/u-boot-build.json
-            out/burn-report.json
+            out/vendor-boot-contract.json
+            out/burn-dtb-contract.json
             out/RELEASE.md
           retention-days: 1
 
@@ -167,11 +169,8 @@ jobs:
             out/burn.img
             out/burn.img.xz
             out/SHA256SUMS
-            out/emmc-boot-contract.json
-            out/mainline-fip-contract.json
-            out/rootfs-contract.json
-            out/u-boot-build.json
-            out/burn-report.json
+            out/vendor-boot-contract.json
+            out/burn-dtb-contract.json
             out/RELEASE.md
           )
           draft_release_ready() {

@@ -76,18 +76,15 @@ ethtool 速率。**
 
 ## 6. CI 还在发布已证伪的变体 A
 
-`.github/workflows/weekly-burn-build.yml` 跑的是 `build-burn-image.sh`（变体 A），
-产出的 `burn.img` 结构合法但**实机全黑**。任何人从 Release 下载都会刷坏一次。
-
-**修它需要**：把 build/validate 两步换成 `build-vendor-boot-burn.sh` /
-`validate-vendor-boot-burn.sh`，输入从 raw 镜像改成解包目录，Release 资产名从
-`emmc-boot-contract.json` / `mainline-fip-contract.json` / `rootfs-contract.json` /
-`burn-report.json` 换成 `vendor-boot-contract.json` / `burn-dtb-contract.json`。
-同时要在 job 里加 `scripts/setup-image-tools.sh`。
+**已修复**（`weekly-burn-build.yml`）。构建链现在是
+`build-burn-payloads.sh` → `build-vendor-boot-burn.sh` → `validate-vendor-boot-burn.sh`，
+发布资产换成 `vendor-boot-contract.json` / `burn-dtb-contract.json`，
+`tests/mainline-workflow-contract.test.mjs` 里有一条断言禁止变体 A/B 的脚本名再出现在
+这个 workflow 里。
 
 注意 `weekly-burn-build.yml` 的 `build` job 依赖 `detect`，而 `detect` 带
 `if: github.ref_name == github.event.repository.default_branch` —— **在 feature 分支上
-dispatch 只会跑诊断 job，产不出包**。改完要合到默认分支才能验证。
+dispatch 只会跑诊断 job，产不出包**，要在默认分支上才能验证。
 
 ---
 

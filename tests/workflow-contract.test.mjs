@@ -333,32 +333,38 @@ test('manual device verification validates first and publishes unique assets sec
   assert.doesNotMatch(workflow, /\.img\.gz/);
 });
 
-test('burn workflow follows the public raw release and publishes eMMC boot contracts', () => {
+test('burn workflow follows the public raw release and publishes the vendor-boot package', () => {
   const workflow = read('.github/workflows/weekly-burn-build.yml');
-  const contracts = [
-    'emmc-boot-contract.json', 'mainline-fip-contract.json', 'rootfs-contract.json',
-  ];
+  const contracts = ['vendor-boot-contract.json', 'burn-dtb-contract.json'];
 
-  assert.match(workflow, /validate-burn-image\.sh out\/burn\.img out\/burn-report\.json/);
+  // 发布的必须是变体 C。变体 A/B 结构合法但实机全黑，见 docs/burn-image.md。
+  assert.match(workflow, /scripts\/build-burn-payloads\.sh[^\n]+payloads/);
+  assert.match(workflow, /scripts\/build-vendor-boot-burn\.sh payloads out/);
+  assert.match(workflow, /validate-vendor-boot-burn\.sh out\/burn\.img out\/vendor-boot-contract\.json/);
+  assert.doesNotMatch(workflow, /build-burn-image\.sh|validate-burn-image\.sh|build-ophub-bl33-burn\.sh/);
   for (const contract of contracts) {
     const matches = workflow.match(new RegExp(contract.replace('.', '\\.'), 'g')) ?? [];
     assert.ok(matches.length >= 3, `${contract} is not checksummed, uploaded, and published`);
   }
   assert.match(
     workflow,
-    /sha256sum[^\n]+emmc-boot-contract\.json[^\n]+mainline-fip-contract\.json[^\n]+rootfs-contract\.json[^\n]+burn-report\.json/,
+    /sha256sum[^\n]+vendor-boot-contract\.json[^\n]+burn-dtb-contract\.json[^\n]+RELEASE\.md/,
   );
   assert.match(workflow, /sha256sum --check/);
   assert.match(workflow, /gh release download/);
   assert.match(workflow, /validate-candidate-artifacts\.mjs/);
   assert.match(workflow, /recipe_digest/);
+  // ampack 是打包器，CI 里必须按钉死的 commit 自己编，不能指望 runner 自带。
+  assert.match(workflow, /setup-image-tools\.sh/);
+  assert.match(workflow, /GITHUB_PATH/);
   for (const recipeInput of [
     'board-overlays/burn-partitions.dtso',
     'config/burn-tooling.json',
     'config/mainline-boot.json',
     'board-inputs/meson1.dtb',
+    'board-inputs/logo.PARTITION',
+    'src/burn-dtb-roles.mjs',
     'src/emmc-boot-chain.mjs',
-    'src/mainline-boot-contract.mjs',
   ]) {
     assert.match(workflow, new RegExp(recipeInput.replaceAll('.', '\\.')));
   }

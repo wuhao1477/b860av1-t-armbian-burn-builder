@@ -180,12 +180,22 @@ bootloader 4M@0  →  reserved 64M@36M  →  cache（提到最前，从 108M 起
 ## 构建与校验
 
 ```bash
-# 构建（需要一个已有的解包目录提供 kernel/initrd/DTB 与 rootfs）
-scripts/build-vendor-boot-burn.sh <source-package-dir> <output-dir>
+# 一次性：按 config 里钉死的 commit 编出 ampack / gxlimg 并加进 PATH
+eval "$(scripts/setup-image-tools.sh)"
 
-# 独立校验交付件
-scripts/validate-vendor-boot-burn.sh <output-dir>/burn.img
+# 1. 从公开 Armbian raw 镜像做出两个载荷（需要 Linux + loop 分区支持）
+scripts/build-burn-payloads.sh <Armbian_*.img.gz> payloads
+
+# 2. 套上原厂 bootloader 打包
+scripts/build-vendor-boot-burn.sh payloads out
+
+# 3. 独立校验交付件
+scripts/validate-vendor-boot-burn.sh out/burn.img out/vendor-boot-contract.json
 ```
+
+每周的 [`weekly-burn-build.yml`](../.github/workflows/weekly-burn-build.yml) 跑的就是
+这三步，发布 `burn.img` / `burn.img.xz` / `vendor-boot-contract.json` /
+`burn-dtb-contract.json`。变体 A/B 的脚本不在发布路径里，有测试断言守着。
 
 构建过程中强制断言的不变量：
 

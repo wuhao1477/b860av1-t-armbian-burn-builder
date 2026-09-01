@@ -33,6 +33,7 @@ test('mainline boot recipe pins the official Bestv inputs and B860 eMMC limit', 
 
 test('public burn builder packages mainline BL33, FAT16 extlinux and sparse rootfs', () => {
   const builder = read('scripts/build-burn-image.sh');
+  const payloads = read('scripts/build-burn-payloads.sh');
   const ubootBuilder = read('scripts/build-mainline-uboot.sh');
 
   for (const payload of ['bootloader.PARTITION', 'boot.PARTITION', 'data.PARTITION']) {
@@ -42,13 +43,18 @@ test('public burn builder packages mainline BL33, FAT16 extlinux and sparse root
   // 单独写它会让烧录停在 [0x30402004] 初始化分区错误。
   assert.match(builder, /embed-dos-mbr[\s\S]{0,120}bootloader\.PARTITION/);
   assert.doesNotMatch(builder, /"\$package\/1\.PARTITION"/);
-  assert.match(builder, /boot-components\.json/);
-  assert.match(builder, /mformat/);
-  assert.match(builder, /extlinux\/extlinux\.conf/);
+  assert.match(builder, /build-burn-payloads\.sh/);
   assert.match(builder, /build-mainline-uboot\.sh/);
   assert.match(builder, /mainline-fip-contract\.json/);
   assert.match(builder, /emmc-boot-contract\.json/);
   assert.doesNotMatch(builder, /env\.PARTITION|system\.PARTITION|armbian\.fit|check-fit/);
+  // 载荷构建与 bootloader 无关，已拆成独立脚本供变体 A 和变体 C 共用。
+  assert.match(payloads, /boot-components\.json/);
+  assert.match(payloads, /mformat/);
+  assert.match(payloads, /extlinux\/extlinux\.conf/);
+  assert.match(payloads, /blkid --match-tag UUID --output value "\$root_part"/);
+  assert.match(payloads, /sparse-ext4-uuid/);
+  assert.doesNotMatch(payloads, /bootloader\.PARTITION|embed-dos-mbr|gxlimg/);
   assert.match(ubootBuilder, /value\.uboot\.defconfig/);
   assert.match(ubootBuilder, /gxlimg[^\n]+-t bl3x/);
   assert.match(ubootBuilder, /--bl301/);
@@ -80,14 +86,19 @@ test('independent validation unpacks the three Linux partition payloads', () => 
   assert.doesNotMatch(validator, /check-fit|raw FIT/);
 });
 
-test('weekly burn workflow builds and publishes extlinux boot contracts', () => {
+test('weekly burn workflow publishes the vendor-boot variant, not the falsified ones', () => {
   const workflow = read('.github/workflows/weekly-burn-build.yml');
 
   assert.match(workflow, /gcc-aarch64-linux-gnu/);
   assert.match(workflow, /libgnutls28-dev/);
-  assert.match(workflow, /scripts\/build-burn-image\.sh/);
-  assert.match(workflow, /scripts\/validate-burn-image\.sh/);
-  assert.match(workflow, /mainline-fip-contract\.json/);
-  assert.match(workflow, /emmc-boot-contract\.json/);
-  assert.doesNotMatch(workflow, /fit-boot-contract\.json|build-mainline-burn-image|validate-mainline-burn-image/);
+  assert.match(workflow, /scripts\/build-burn-payloads\.sh/);
+  assert.match(workflow, /scripts\/build-vendor-boot-burn\.sh/);
+  assert.match(workflow, /scripts\/validate-vendor-boot-burn\.sh/);
+  assert.match(workflow, /vendor-boot-contract\.json/);
+  assert.match(workflow, /burn-dtb-contract\.json/);
+  // 变体 A/B 实机全黑，绝不能再出现在发布路径里。
+  assert.doesNotMatch(
+    workflow,
+    /build-burn-image\.sh|validate-burn-image\.sh|build-ophub-bl33-burn\.sh|mainline-fip-contract\.json|emmc-boot-contract\.json/,
+  );
 });
