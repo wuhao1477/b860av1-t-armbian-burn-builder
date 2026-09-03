@@ -15,7 +15,7 @@
 | **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-02 实机刷入、进系统、eMMC 跑在 DDR52 82 MB/s，见 [`docs/burn-image.md`](docs/burn-image.md) |
 | Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
 
-直接下载：[最新实机验证的 `burn.img.xz`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)（`burn.img` sha256 `acdff2d3…`，默认账号 `root` / `password`）。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
+直接下载：[最新实机验证的 `burn.img.xz`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)（`burn.img` sha256 `acdff2d3…`，即下表的 `build-44.1`，首登向导现场设 root 口令）。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
 **刷完直接能用，没有首次开机向导。** 镜像里由
 [`scripts/apply-rootfs-defaults.sh`](scripts/apply-rootfs-defaults.sh) 预置好：
@@ -29,8 +29,17 @@
 | swap | zram（`armbian-zram-config`） |
 | 开机 | 禁用 `NetworkManager-wait-online`，省约 6 s |
 
-**这些预置要 build-46.1 之后的包才有。** 上面链接的 latest 是 build-46.1
-（2026-09-01），早于这批改动：刷完仍会跑首登向导，root 口令仍由向导现场设。
+**预置要 `build-47.1` 才完整。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
+序号（中间那个 `build-46.1` 是上游 raw release，别混）：
+
+| 运行 | 预置 | 刷完能不能进系统 |
+|---|---|---|
+| `build-44.1`（当前 `latest`，实机验证过的那份） | 无 | 能，走首登向导现场设口令 |
+| `build-45.1` | 有，但首登标记没真删掉 | 能，同上 |
+| `build-46.1` | 有，标记删了却**没钉口令** | **不能** —— root 口令是上游出厂哈希，明文未知 |
+| `build-47.1` | 完整 | 能，`root` / `password` |
+
+带全部预置的最新包：[`…-build-47.1`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/tag/b860-burn-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1-build-47.1)（`burn.img` sha256 `ae742a6c…`，容器结构已校验，这一份字节流还没上机）。
 
 WiFi 密码不进仓库（CI 产物是公开的）。要预置就在本地放 `board-inputs/wifi.env`
 写两行 `WIFI_SSID=` / `WIFI_PSK=` 再自己构建；细节见

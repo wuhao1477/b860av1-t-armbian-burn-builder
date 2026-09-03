@@ -171,9 +171,11 @@ dispatch 只会跑诊断 job，产不出包**，要在默认分支上才能验�
 **删首登向导必须连口令一起钉死。** 镜像里唯一会*设*口令的东西就是那个向导；只删
 `/root/.not_logged_in_yet`、不动 `/etc/shadow`，包的 root 口令就是上游 Armbian 的出厂
 哈希（向导本来会强制改掉它），谁都不知道明文是什么，实机 SSH 只会 `Permission denied`。
-`apply-rootfs-defaults.sh` 因此把 `openssl passwd -6 -salt b860burn password` 的结果写进
+**`build-46.1` 就是这么出去的** —— 向导没了、口令没钉，那个包谁也进不去，别刷它。
+`apply-rootfs-defaults.sh` 现在把 `openssl passwd -6 -salt b860burn password` 的结果写进
 去，并顺手把第 3 字段（上次改口令的天数）从 `0` 改成固定值 —— `0` 是「下次登录强制改
-口令」，留着照样会被拦一次。写完有一条后置断言，没钉上就让构建红。
+口令」，留着照样会被拦一次。写完有一条后置断言，没钉上就让构建红；`build-47.1`
+（2026-09-03）是第一个带完整预置的包。
 
 **为什么不用 Armbian 自带的 `armbian-resize-filesystem`**：它先用 `parted` 重算分区
 边界，而这块板的分区表来自 DTB 的 `/partitions`（Amlogic 私有格式）：
