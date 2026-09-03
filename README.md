@@ -15,7 +15,7 @@
 | **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-02 实机刷入、进系统、eMMC 跑在 DDR52 82 MB/s，见 [`docs/burn-image.md`](docs/burn-image.md) |
 | Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
 
-直接下载：[**`build-48.1` 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/tag/b860-burn-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1-build-48.1)（`burn.img` sha256 `fa88d436…`，预置完整，刷完 `root` / `password` 直接 SSH）。
+直接下载：[**`build-49.1` 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/tag/b860-burn-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1-build-49.1)（`burn.img` sha256 `2303d1c5…`，预置完整，刷完 `root` / `password` 直接 SSH，根分区自动撑满）。
 GitHub 上那个 `latest` 标签仍指向 `build-44.1` —— 那个包没有预置，要走首登向导，别按
 `latest` 下。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
@@ -31,7 +31,7 @@ GitHub 上那个 `latest` 标签仍指向 `build-44.1` —— 那个包没有预
 | swap | zram 400 MB（`armbian-zram-config`，`build-48.1` 起才真的起来） |
 | 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统 |
 
-**预置要 `build-48.1` 才完整。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
+**预置要 `build-49.1` 才完整。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
 序号（中间那个 `build-46.1` 是上游 raw release，别混）：
 
 | 运行 | 预置 | 刷完能不能进系统 |
@@ -40,7 +40,8 @@ GitHub 上那个 `latest` 标签仍指向 `build-44.1` —— 那个包没有预
 | `build-45.1` | 有，但首登标记没真删掉 | 能，同上 |
 | `build-46.1` | 有，标记删了却**没钉口令** | **不能** —— root 口令是上游出厂哈希，明文未知 |
 | `build-47.1` | **除 swap 全部实机验证通过** | 能，`root` / `password`；只是没有 swap |
-| **`build-48.1`（用这个）** | 完整；swap 改成 drop-in，机制已在实机上验证 | 能 |
+| `build-48.1` | 差根分区没撑满（2.9G）；其余 5 项实机验证通过 | 能 |
+| **`build-49.1`（用这个）** | 完整；补回开机 `resize2fs` | 能 |
 
 `build-47.1` 的完整实机结果、以及 swap 为什么没起来（构建时写进 rootfs 的 `*.wants`
 符号链接一条都没进镜像，同一毫秒写的常规文件全在），见
