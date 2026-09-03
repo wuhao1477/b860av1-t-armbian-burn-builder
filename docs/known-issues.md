@@ -264,7 +264,25 @@ journalctl -u armbian-zram-config         → 手工 enable 之前没有任何�
 - **不是仓库里有代码删链接**：`grep -rn "type l|-delete" scripts/ src/` 只有一处，
   是变体 A 脚本里删多余 DTB 用的。
 
+**`build-48.1` 的新证据：丢失发生在 `dd` 之后，而且不是只丢我们写的那条。**
+新加的 `debugfs` 复查（构建日志 run 33723826992）证明链接确实躺在要 sparse 的那份 ext4 里：
+
+```
+12231  120777  51  3-Sep-2026 06:35   armbian-zram-config.service    ← 我们写的，在包里
+ 3192  120777  46  31-Aug-2026 02:19  armbian-ramlog.service         ← 上游写的，也在包里
+ 3194..3197    14-Aug-2026 06:29/06:30  fake-hwclock-load / keyboard-setup / systemd-pstore / systemd-resolved
+```
+
+实机上这个目录只剩 `3194..3197` 那四条。**上游那条 `armbian-ramlog.service` 链接同样
+不见了** —— 它是上游镜像自己写的，跟我们的脚本无关，所以这不是「我们写链接的方式不对」。
+存活的四条 mtime 都是 14-Aug（基础镜像装包时间），丢掉的两条是 31-Aug（ophub 组装镜像）
+和 3-Sep（我们）。
+
+（`armbian-ramlog` 在实机上照样在跑，是 `armbian-ramlog.timer` 拉起来的，
+`systemctl is-enabled armbian-ramlog` 是 `disabled`。别拿「服务在跑」当链接还在。）
+
 没排除的：`sparse` 转换、USB Burning Tool 写 eMMC、初始化阶段（journald 起来之前）。
+`umount` / `e2fsck` / `dd` 已经由上面那份 `debugfs` 列表排除。
 
 **绕开的办法**：`apply-rootfs-defaults.sh` 现在主要靠 `<target>.d/` 里的 drop-in
 **常规文件**（`[Unit] Wants=`，和 `*.wants` 链接完全等价），链接照旧也建一条，好让
@@ -272,3 +290,18 @@ journalctl -u armbian-zram-config         → 手工 enable 之前没有任何�
 `debugfs` 在要写进 eMMC 的那份 ext4 上复查 drop-in，缺了就让构建红 —— 这次别再靠
 「脚本打印了启用」下结论；同时把 `sysinit.target.wants` 的目录列表打进日志，链接到底
 是不是又掉了，留给下一次实机对照。
+
+**drop-in 这条路已实机验证（2026-09-03，`build-47.1` 的板子上）。** 把手工建的那条链接
+删掉、只留 `/etc/systemd/system/sysinit.target.d/10-b860-armbian-zram-config.conf`，
+`daemon-reload` 后 `systemctl show sysinit.target -p Wants` 里就有
+`armbian-zram-config.service`；冷重启后：
+
+```
+ls /etc/systemd/system/sysinit.target.wants/ | grep -c zram   → 0        ← 一条链接都没有
+swapon --show     → /dev/zram0  partition  400.3M  PRIO 5
+zramctl           → zram0 lzo-rle 400.4M [SWAP]（zram1 50M 是 ramlog 的）
+systemctl is-active  armbian-zram-config.service → active
+systemctl is-enabled armbian-zram-config.service → disabled              ← 只是显示，不影响启动
+```
+
+所以即使链接再一次进不了镜像，`build-48.1` 的 swap 也会起来。
