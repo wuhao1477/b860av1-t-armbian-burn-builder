@@ -56,6 +56,7 @@ jobs:
             config/mainline-boot.json board-overlays/burn-partitions.dtso \
             scripts/build-burn-payloads.sh scripts/build-vendor-boot-burn.sh \
             scripts/validate-vendor-boot-burn.sh scripts/setup-image-tools.sh \
+            scripts/apply-rootfs-defaults.sh \
             scripts/burn-image.mjs scripts/mainline-boot.mjs \
             src/android-sparse.mjs src/burn-dtb-roles.mjs src/emmc-boot-chain.mjs \
             | sha256sum | awk '{print $1}')

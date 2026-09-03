@@ -357,6 +357,11 @@ test('burn workflow follows the public raw release and publishes the vendor-boot
   // ampack 是打包器，CI 里必须按钉死的 commit 自己编，不能指望 runner 自带。
   assert.match(workflow, /setup-image-tools\.sh/);
   assert.match(workflow, /GITHUB_PATH/);
+  // 断言要对着 recipe_digest 的文件清单，不是整个 workflow：文件在别处出现一次
+  // 也能让 assert.match(workflow, …) 过，而漏进指纹的后果是 detect 判
+  // changed=false —— 改了东西却永远出不来新包。
+  const recipeList = workflow.match(/recipe_digest=\$\(sha256sum([\s\S]+?)\| sha256sum/)?.[1];
+  assert.ok(recipeList, 'recipe_digest must checksum an explicit file list');
   for (const recipeInput of [
     'board-overlays/burn-partitions.dtso',
     'config/burn-tooling.json',
@@ -365,8 +370,10 @@ test('burn workflow follows the public raw release and publishes the vendor-boot
     'board-inputs/logo.PARTITION',
     'src/burn-dtb-roles.mjs',
     'src/emmc-boot-chain.mjs',
+    // rootfs 预置（首登向导、root 口令、zram、resize2fs）也决定包的内容。
+    'scripts/apply-rootfs-defaults.sh',
   ]) {
-    assert.match(workflow, new RegExp(recipeInput.replaceAll('.', '\\.')));
+    assert.match(recipeList, new RegExp(recipeInput.replaceAll('.', '\\.')));
   }
   assert.match(workflow, /SOURCE_REPOSITORY:\s*wuhao1477\/b860av1-t-armbian-builder/);
   assert.match(workflow, /gh release download "\$PUBLIC_RELEASE" --repo "\$SOURCE_REPOSITORY"/);
