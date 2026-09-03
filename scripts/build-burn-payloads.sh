@@ -21,7 +21,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 metadata="$(dirname -- "$raw")/boot-components.json"
 [[ -f "$raw" && -f "$metadata" ]] || { echo 'raw image or boot-components.json not found' >&2; exit 1; }
 
-for command in blkid fdtget gzip losetup mcopy mformat mmd node sha256sum; do
+for command in blkid debugfs fdtget gzip losetup mcopy mformat mmd node sha256sum; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
@@ -121,6 +121,21 @@ fsck_status=$?
 set -e
 [[ "$fsck_status" -le 1 ]] || { echo "root filesystem check failed: $fsck_status" >&2; exit 1; }
 sudo dd if="$root_part" of="$tmp/rootfs.ext4" bs=4M status=none
+
+# 预置项必须真的躺在要写进 eMMC 的那份 ext4 里，光看 apply-rootfs-defaults.sh 的
+# 日志不算数：build-47.1 打印了「启用」、e2fsck 报干净，实机上两条 *.wants 符号
+# 链接却都不见了（docs/known-issues.md 第 8 条）。所以在 dd 出来的镜像上用 debugfs
+# 直接查，不挂载也不改字节。drop-in 是常规文件，缺了就让构建红；链接只打印，
+# 它是不是又掉了留给下一次实机对照。
+zram_dropin=/etc/systemd/system/sysinit.target.d/10-b860-armbian-zram-config.conf
+sudo debugfs -R "stat $zram_dropin" "$tmp/rootfs.ext4" 2>&1 | grep -q '^Inode:' || {
+  echo "zram drop-in is missing from the packaged rootfs: $zram_dropin" >&2
+  exit 1
+}
+echo "  rootfs: drop-in 已在包里 $zram_dropin"
+sudo debugfs -R 'ls -l /etc/systemd/system/sysinit.target.wants' "$tmp/rootfs.ext4" 2>/dev/null \
+  | sed 's/^/  rootfs: sysinit.target.wants: /'
+
 node "$root/scripts/burn-image.mjs" sparse \
   "$tmp/rootfs.ext4" "$package/data.PARTITION" "$root_size" >/dev/null
 [[ "$(node "$root/scripts/burn-image.mjs" sparse-ext4-uuid "$package/data.PARTITION")" == "$root_uuid" ]] || {

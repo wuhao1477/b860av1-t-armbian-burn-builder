@@ -25,21 +25,24 @@
 | 登录 | `root` / `password`，SSH 直接进，不问 shell / 用户名 / 时区 |
 | 口令 | `/etc/shadow` 里钉死的 `$6$` 哈希（`openssl passwd -6 -salt b860burn password`）；删了首登向导就没人再设口令，不钉死等于发一个口令未知的包 |
 | shell | zsh 5.9 + oh-my-zsh（改 `root_shell` 一行可换 bash） |
-| 根分区 | 首次开机自动 `resize2fs` 撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G），跑完自删 |
-| swap | zram（`armbian-zram-config`） |
-| 开机 | 禁用 `NetworkManager-wait-online`，省约 6 s |
+| 根分区 | 首次开机自动撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G，实机确认） |
+| swap | zram（`armbian-zram-config`，`build-48.1` 起才真的起来） |
+| 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统 |
 
-**预置要 `build-47.1` 才完整。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
+**预置要 `build-48.1` 才完整。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
 序号（中间那个 `build-46.1` 是上游 raw release，别混）：
 
 | 运行 | 预置 | 刷完能不能进系统 |
 |---|---|---|
-| `build-44.1`（当前 `latest`，实机验证过的那份） | 无 | 能，走首登向导现场设口令 |
+| `build-44.1`（当前 `latest`） | 无 | 能，走首登向导现场设口令 |
 | `build-45.1` | 有，但首登标记没真删掉 | 能，同上 |
 | `build-46.1` | 有，标记删了却**没钉口令** | **不能** —— root 口令是上游出厂哈希，明文未知 |
-| `build-47.1` | 完整 | 能，`root` / `password` |
+| `build-47.1` | **除 swap 全部实机验证通过** | 能，`root` / `password`；只是没有 swap |
+| `build-48.1` | 完整（swap 换成 drop-in 才落地） | 能 |
 
-带全部预置的最新包：[`…-build-47.1`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/tag/b860-burn-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1-build-47.1)（`burn.img` sha256 `ae742a6c…`，容器结构已校验，这一份字节流还没上机）。
+`build-47.1` 的完整实机结果、以及 swap 为什么没起来（构建时写进 rootfs 的 `*.wants`
+符号链接一条都没进镜像，同一毫秒写的常规文件全在），见
+[`docs/known-issues.md`](docs/known-issues.md) 第 7、8 条。
 
 WiFi 密码不进仓库（CI 产物是公开的）。要预置就在本地放 `board-inputs/wifi.env`
 写两行 `WIFI_SSID=` / `WIFI_PSK=` 再自己构建；细节见

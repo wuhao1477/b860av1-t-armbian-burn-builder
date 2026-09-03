@@ -104,32 +104,34 @@ test('rootfs defaults flip the boot-time services measured on hardware', (contex
 
   assert.equal(apply(directory).status, 0);
 
+  // 主力机制是 drop-in 常规文件。build-47.1 实机证明 *.wants 符号链接进不了镜像
+  // （同一毫秒写的常规文件全在，两条链接都没了，见 docs/known-issues.md 第 8 条），
+  // 所以这一条不能退回成只建链接。
+  const dropin = fs.readFileSync(
+    path.join(directory, 'etc/systemd/system/sysinit.target.d/10-b860-armbian-zram-config.conf'), 'utf8',
+  );
+  assert.match(dropin, /^Wants=armbian-zram-config\.service$/m);
+  assert.match(dropin, /^\[Unit\]$/m);
+  // 链接照旧建一条，好让实机上 systemctl is-enabled 显示 enabled。
   assert.equal(
     fs.readlinkSync(path.join(directory, 'etc/systemd/system/sysinit.target.wants/armbian-zram-config.service')),
     '/usr/lib/systemd/system/armbian-zram-config.service',
-  );
-  assert.equal(
-    fs.readlinkSync(path.join(directory, 'etc/systemd/system/multi-user.target.wants/b860-expand-rootfs.service')),
-    '/etc/systemd/system/b860-expand-rootfs.service',
   );
   // 实测这条服务占开机 6 s，而这块板从来不需要等网络就绪。
   assert.ok(!exists(directory, 'etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service'));
 });
 
-test('rootfs defaults expand the filesystem without touching the Amlogic partition table', (context) => {
+test('rootfs defaults ship no resize service of our own', (context) => {
+  // build-47.1 实机：我们那条 b860-expand-rootfs.service 的链接没进镜像、一次都没
+  // 启动过，而 p14 上的 ext4 照样从 768000 块长到 1351680 块（撑满 data 分区）。
+  // 既然有别的东西在初始化阶段就撑好了，这套东西就是多余的，不要再加回来。
   const directory = fakeRootfs(context);
 
   assert.equal(apply(directory).status, 0);
 
-  const expand = fs.readFileSync(path.join(directory, 'usr/local/sbin/b860-expand-rootfs'), 'utf8');
-  // parted 对这块盘报 "unrecognised disk label"（分区表来自 DTB 的 /partitions），
-  // 所以 armbian-resize-filesystem 用不了，我们这份只准跑 resize2fs。
-  // 去掉注释再断言 —— 注释里正要解释为什么不碰 parted。
-  const code = expand.split('\n').filter((line) => !line.trimStart().startsWith('#')).join('\n');
-  assert.match(code, /resize2fs/);
-  assert.doesNotMatch(code, /parted|sfdisk|fdisk/);
-  assert.match(code, /rm -f \/etc\/systemd\/system\/multi-user\.target\.wants\/b860-expand-rootfs\.service/);
-  assert.ok((fs.statSync(path.join(directory, 'usr/local/sbin/b860-expand-rootfs')).mode & 0o111) !== 0);
+  assert.ok(!exists(directory, 'usr/local/sbin/b860-expand-rootfs'));
+  assert.ok(!exists(directory, 'etc/systemd/system/b860-expand-rootfs.service'));
+  assert.ok(!exists(directory, 'etc/systemd/system/multi-user.target.wants/b860-expand-rootfs.service'));
 });
 
 test('rootfs defaults refuse a rootfs where the Armbian resizer is enabled', (context) => {
@@ -157,6 +159,19 @@ test('rootfs defaults are idempotent and ship no credentials by default', (conte
   assert.ok(!fs.existsSync(path.join(root, 'board-inputs/wifi.env')), 'wifi.env must never be committed');
   assert.match(second.stdout, /跳过 WiFi 预置/);
   assert.ok(!exists(directory, 'etc/NetworkManager/system-connections'));
+});
+
+test('the packager verifies the preseed on the image it is about to sparse', () => {
+  // 「脚本打印了启用」和「字节真的在包里」是两件事，build-47.1 就是在这里出事的。
+  // 所以 dd 之后必须用 debugfs 复查一遍 drop-in，缺了让构建红。
+  const packager = fs.readFileSync(path.join(root, 'scripts/build-burn-payloads.sh'), 'utf8');
+  const dd = packager.indexOf('dd if="$root_part"');
+  const sparse = packager.indexOf('burn-image.mjs" sparse');
+  assert.ok(dd > 0 && sparse > dd);
+  const between = packager.slice(dd, sparse);
+  assert.match(between, /debugfs -R "stat \$zram_dropin"/);
+  assert.match(between, /zram drop-in is missing from the packaged rootfs/);
+  assert.match(packager, /zram_dropin=\/etc\/systemd\/system\/sysinit\.target\.d\/10-b860-armbian-zram-config\.conf/);
 });
 
 test('rootfs defaults reject a directory that is not a rootfs', (context) => {

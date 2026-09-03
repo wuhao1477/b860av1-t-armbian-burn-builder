@@ -6,9 +6,9 @@ set -Eeuo pipefail
 #
 # 之前这几项都是刷完机再手工改的，每次重刷全丢（见 docs/known-issues.md 第 7 条）。
 #
-# 全部用符号链接直接操作 systemd 的 *.wants 目录，**不用 systemctl --root**：
-# 构建机（CI runner / 本地 Docker）不一定装了 systemd，而这几个 unit 的
-# [Install] 段都很简单，符号链接是它唯一的产物。
+# 开关 unit 不用 systemctl --root：构建机（CI runner / 本地 Docker）不一定装了
+# systemd。开一个 unit 会写两样东西 —— 一个 <target>.d drop-in（常规文件）加一条
+# 传统 *.wants 符号链接，为什么要两样见 §4 和 docs/known-issues.md 第 8 条。
 
 usage() { echo "usage: $0 root-mount" >&2; exit 2; }
 [[ $# -eq 1 ]] || usage
@@ -32,10 +32,9 @@ root_shell=/usr/bin/zsh
 # 单引号是必须的，$6 会被 shell 当变量。
 root_password_hash='$6$b860burn$21d1hZz5IOJZocmktz6vVDYwbPhywU7WZtS.7vOC73/M5HGWXUs0SBGFcIbsgfQBh1MwgdtMvQyG8HO2lACOj/'
 
-# 要开/要关的 unit，写成 "unit:WantedBy 目标"。开 = 建链接，关 = 删链接。
+# 要开/要关的 unit，写成 "unit:WantedBy 目标"。开 = drop-in + 链接，关 = 删链接。
 enable_units=(
-  'armbian-zram-config.service:sysinit.target'   # 512 MiB 内存的板子，没 swap 很难受
-  'b860-expand-rootfs.service:multi-user.target' # 见下，本文件自己装的
+  'armbian-zram-config.service:sysinit.target'   # 1 GB 内存的板子，没 swap 很难受
 )
 disable_units=(
   'NetworkManager-wait-online.service:network-online.target'  # 实测省 6 s 开机
@@ -102,44 +101,16 @@ fi
 }
 say 'root 口令 = 已钉死的 $6$ 哈希（明文见 README）'
 
-# ---- 3. 首次开机把根文件系统撑满 ----------------------------------------
-# 不能用 Armbian 自带的 armbian-resize-filesystem：它先用 parted 重算分区边界，
-# 而这块板的分区表来自 DTB 的 /partitions（Amlogic 私有格式），parted 直接报
-# "unrecognised disk label"，脚本会在找 partstart 时 return 1。
-#
-# 也不需要它做的事 —— data 分区在 DTB 里是 ffffffff（吃掉剩余全部空间），实机
-# 上 p14 已经有 5.15 GiB，缺的只是把 2.81 GiB 的 ext4 撑到分区大小。所以只跑
-# resize2fs，一个字节的分区表都不碰。
-$sudo tee "$root_mount/usr/local/sbin/b860-expand-rootfs" >/dev/null <<'SCRIPT'
-#!/bin/sh
-# 首次开机把根文件系统撑到 data 分区的实际大小，然后自己关掉。
-# 只做 resize2fs：分区表是 Amlogic 私有格式，parted 认不出来，也不需要改。
-set -eu
-device=$(findmnt -no SOURCE /)
-resize2fs "$device"
-rm -f /etc/systemd/system/multi-user.target.wants/b860-expand-rootfs.service
-SCRIPT
-$sudo chmod 0755 "$root_mount/usr/local/sbin/b860-expand-rootfs"
-
-$sudo tee "$root_mount/etc/systemd/system/b860-expand-rootfs.service" >/dev/null <<'UNIT'
-[Unit]
-Description=Expand the B860 root filesystem to fill the data partition
-Documentation=https://github.com/wuhao1477/b860av1-t-armbian-burn-builder
-ConditionPathExists=/usr/local/sbin/b860-expand-rootfs
-
-[Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/local/sbin/b860-expand-rootfs
-TimeoutStartSec=300
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-say '已装 b860-expand-rootfs.service（只在首次开机跑一次）'
+# ---- 3. 根文件系统撑满：不用我们管 --------------------------------------
+# 之前这里装过一个 b860-expand-rootfs.service 跑 resize2fs。build-47.1 实机结果
+# 证明它是多余的：它的 *.wants 链接根本没进镜像（第 4 节说的那个坑），整个首次
+# 开机一次都没启动过，而 p14 上的 ext4 照样从 768000 块长到了 1351680 块
+# （5.15 GiB，正好是 data 分区的全部空间）—— 有别的东西在初始化阶段就撑好了。
+# 所以这一节只剩一条断言，见 §4 末尾：Armbian 自带那个基于 parted 的 resizer
+# 必须保持关闭，parted 在这块板上认不出 Amlogic 的私有分区表。
 
 # ---- 4. 开关 unit -------------------------------------------------------
-# unit 文件可能在 /usr/lib（发行版自带）也可能在 /etc（我们刚装的），都要能找到。
+# unit 文件可能在 /usr/lib（发行版自带）也可能在 /etc（我们自己装的），都要能找到。
 unit_path() {
   local unit=$1 base
   for base in usr/lib etc; do
@@ -152,13 +123,30 @@ unit_path() {
   return 1
 }
 
+# 开一个 unit 写两样东西，因为 build-47.1 证明光靠符号链接不行：
+#
+#   构建日志明明打印了「启用 armbian-zram-config.service」，e2fsck 报文件系统干净，
+#   可实机上 /etc/systemd/system/*.wants/ 里两条链接一条都没有，而同一个脚本同一
+#   毫秒写的常规文件（/etc/shadow、/etc/systemd/system/b860-expand-rootfs.service、
+#   /usr/local/sbin/b860-expand-rootfs）全都在。链接是在哪一步掉的还没定论
+#   （docs/known-issues.md 第 8 条），但「常规文件扛得住」是实机证据。
+#
+# 所以主力机制是 <target>.d/ 里的 drop-in 常规文件：[Unit] Wants= 和 *.wants 链接
+# 完全等价。链接照旧也建一条，好让 systemctl is-enabled 显示 enabled。
 for entry in "${enable_units[@]}"; do
   unit=${entry%%:*}
   target=${entry#*:}
   source_unit=$(unit_path "$unit")
+  $sudo mkdir -p "$root_mount/etc/systemd/system/$target.d"
+  $sudo tee "$root_mount/etc/systemd/system/$target.d/10-b860-${unit%.service}.conf" >/dev/null <<CONF
+# 由 scripts/apply-rootfs-defaults.sh 写入。等价于 $target.wants/$unit，
+# 但是常规文件 —— 符号链接进不了镜像，见 docs/known-issues.md 第 8 条。
+[Unit]
+Wants=$unit
+CONF
   $sudo mkdir -p "$root_mount/etc/systemd/system/$target.wants"
   $sudo ln -sfn "$source_unit" "$root_mount/etc/systemd/system/$target.wants/$unit"
-  say "启用 $unit"
+  say "启用 $unit（$target.d drop-in + $target.wants 链接）"
 done
 
 for entry in "${disable_units[@]}"; do
