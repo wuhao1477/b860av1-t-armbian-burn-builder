@@ -121,17 +121,26 @@ test('rootfs defaults flip the boot-time services measured on hardware', (contex
   assert.ok(!exists(directory, 'etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service'));
 });
 
-test('rootfs defaults ship no resize service of our own', (context) => {
-  // build-47.1 实机：我们那条 b860-expand-rootfs.service 的链接没进镜像、一次都没
-  // 启动过，而 p14 上的 ext4 照样从 768000 块长到 1351680 块（撑满 data 分区）。
-  // 既然有别的东西在初始化阶段就撑好了，这套东西就是多余的，不要再加回来。
+test('rootfs defaults grow the rootfs into the data partition on boot', (context) => {
+  // data 分区在 DTB 里是 size = <0xffffffff 0xffffffff>（剩下全给我），实际大小取决于
+  // 板上 eMMC，构建时算不出来 —— 只能在板上 resize2fs。build-48.1 实机刷完根分区就是
+  // raw 镜像那 768000 块（2.9G），而 p14 有 1351680 块；build-47.1 上看到的 5.1G 是
+  // 当时手工跑过 resize2fs，不是「有别的东西会撑」。所以这套东西必须进包。
   const directory = fakeRootfs(context);
 
   assert.equal(apply(directory).status, 0);
 
-  assert.ok(!exists(directory, 'usr/local/sbin/b860-expand-rootfs'));
-  assert.ok(!exists(directory, 'etc/systemd/system/b860-expand-rootfs.service'));
-  assert.ok(!exists(directory, 'etc/systemd/system/multi-user.target.wants/b860-expand-rootfs.service'));
+  const helper = path.join(directory, 'usr/local/sbin/b860-expand-rootfs');
+  // 不带尺寸 = 撑满所在分区；已经满了会 Nothing to do! + exit 0，所以幂等、不用标记。
+  assert.match(fs.readFileSync(helper, 'utf8'), /resize2fs "\$\(findmnt -no SOURCE \/\)"/);
+  assert.ok(fs.statSync(helper).mode & 0o111, 'helper must be executable');
+  const unit = fs.readFileSync(path.join(directory, 'etc/systemd/system/b860-expand-rootfs.service'), 'utf8');
+  assert.match(unit, /^ExecStart=\/usr\/local\/sbin\/b860-expand-rootfs$/m);
+  // 和 zram 同一个坑：*.wants 链接进不了镜像，drop-in 常规文件才是主力。
+  const dropin = fs.readFileSync(
+    path.join(directory, 'etc/systemd/system/multi-user.target.d/10-b860-expand-rootfs.conf'), 'utf8',
+  );
+  assert.match(dropin, /^Wants=b860-expand-rootfs\.service$/m);
 });
 
 test('rootfs defaults refuse a rootfs where the Armbian resizer is enabled', (context) => {
@@ -169,9 +178,11 @@ test('the packager verifies the preseed on the image it is about to sparse', () 
   const sparse = packager.indexOf('burn-image.mjs" sparse');
   assert.ok(dd > 0 && sparse > dd);
   const between = packager.slice(dd, sparse);
-  assert.match(between, /debugfs -R "stat \$zram_dropin"/);
-  assert.match(between, /zram drop-in is missing from the packaged rootfs/);
+  assert.match(between, /debugfs -R "stat \$dropin"/);
+  assert.match(between, /drop-in is missing from the packaged rootfs/);
   assert.match(packager, /zram_dropin=\/etc\/systemd\/system\/sysinit\.target\.d\/10-b860-armbian-zram-config\.conf/);
+  assert.match(packager, /expand_dropin=\/etc\/systemd\/system\/multi-user\.target\.d\/10-b860-expand-rootfs\.conf/);
+  assert.match(between, /for dropin in "\$zram_dropin" "\$expand_dropin"/);
 });
 
 test('rootfs defaults reject a directory that is not a rootfs', (context) => {

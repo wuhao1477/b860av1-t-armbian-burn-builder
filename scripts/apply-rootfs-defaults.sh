@@ -34,7 +34,8 @@ root_password_hash='$6$b860burn$21d1hZz5IOJZocmktz6vVDYwbPhywU7WZtS.7vOC73/M5HGW
 
 # 要开/要关的 unit，写成 "unit:WantedBy 目标"。开 = drop-in + 链接，关 = 删链接。
 enable_units=(
-  'armbian-zram-config.service:sysinit.target'   # 1 GB 内存的板子，没 swap 很难受
+  'armbian-zram-config.service:sysinit.target'    # 1 GB 内存的板子，没 swap 很难受
+  'b860-expand-rootfs.service:multi-user.target'  # §3 装的，撑满 data 分区
 )
 disable_units=(
   'NetworkManager-wait-online.service:network-online.target'  # 实测省 6 s 开机
@@ -101,13 +102,42 @@ fi
 }
 say 'root 口令 = 已钉死的 $6$ 哈希（明文见 README）'
 
-# ---- 3. 根文件系统撑满：不用我们管 --------------------------------------
-# 之前这里装过一个 b860-expand-rootfs.service 跑 resize2fs。build-47.1 实机结果
-# 证明它是多余的：它的 *.wants 链接根本没进镜像（第 4 节说的那个坑），整个首次
-# 开机一次都没启动过，而 p14 上的 ext4 照样从 768000 块长到了 1351680 块
-# （5.15 GiB，正好是 data 分区的全部空间）—— 有别的东西在初始化阶段就撑好了。
-# 所以这一节只剩一条断言，见 §4 末尾：Armbian 自带那个基于 parted 的 resizer
-# 必须保持关闭，parted 在这块板上认不出 Amlogic 的私有分区表。
+# ---- 3. 开机把根文件系统撑满 data 分区 ----------------------------------
+# data 分区在 DTB 里是 size = <0xffffffff 0xffffffff>（「剩下全给我」），所以它的
+# 实际大小取决于板上 eMMC 有多大，构建时算不出来 —— 只能在板上读。8 GB 那批是
+# 5,536,481,280 字节，而从 raw 镜像抠出来的 ext4 只有 768000 块（3.0 GiB），
+# 差 2.1 GiB 全是白扔的。
+#
+# 所以装一个 oneshot：resize2fs 不带尺寸就是「撑满所在分区」，在线 resize 实测 8 s
+# 内完成（768000 → 1351680 块）。已经满了它打印 Nothing to do! 并 exit 0，
+# 每次开机跑一遍没有副作用，不需要一次性标记。
+#
+# 别用 Armbian 自带的 armbian-resize-filesystem：它先用 parted 重算分区边界，
+# 而这块板的分区表来自 DTB 的 /partitions（Amlogic 私有格式），parted 直接
+# unrecognised disk label，脚本在找 partstart 时 return 1。§4 末尾有断言盯着它。
+#
+# 单独一个脚本文件而不是把命令写进 ExecStart=，是为了躲开 systemd 对 $ 的转义规则。
+$sudo mkdir -p "$root_mount/usr/local/sbin"
+$sudo tee "$root_mount/usr/local/sbin/b860-expand-rootfs" >/dev/null <<'EXPAND'
+#!/bin/sh
+# 由 scripts/apply-rootfs-defaults.sh 写入镜像。手工跑也可以，幂等。
+set -e
+exec resize2fs "$(findmnt -no SOURCE /)"
+EXPAND
+$sudo chmod 0755 "$root_mount/usr/local/sbin/b860-expand-rootfs"
+$sudo tee "$root_mount/etc/systemd/system/b860-expand-rootfs.service" >/dev/null <<'UNIT'
+[Unit]
+Description=Grow the B860 rootfs to fill the Amlogic data partition
+Documentation=https://github.com/wuhao1477/b860av1-t-armbian-burn-builder
+After=local-fs.target
+ConditionPathIsReadWrite=/
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/local/sbin/b860-expand-rootfs
+UNIT
+say '已装 b860-expand-rootfs.service（开机 resize2fs 撑满 data 分区）'
 
 # ---- 4. 开关 unit -------------------------------------------------------
 # unit 文件可能在 /usr/lib（发行版自带）也可能在 /etc（我们自己装的），都要能找到。
@@ -137,8 +167,11 @@ for entry in "${enable_units[@]}"; do
   unit=${entry%%:*}
   target=${entry#*:}
   source_unit=$(unit_path "$unit")
+  # 文件名统一 10-b860-*.conf；unit 自己就叫 b860-* 的话别写成 10-b860-b860-*。
+  dropin=${unit%.service}
+  dropin="10-b860-${dropin#b860-}.conf"
   $sudo mkdir -p "$root_mount/etc/systemd/system/$target.d"
-  $sudo tee "$root_mount/etc/systemd/system/$target.d/10-b860-${unit%.service}.conf" >/dev/null <<CONF
+  $sudo tee "$root_mount/etc/systemd/system/$target.d/$dropin" >/dev/null <<CONF
 # 由 scripts/apply-rootfs-defaults.sh 写入。等价于 $target.wants/$unit，
 # 但是常规文件 —— 符号链接进不了镜像，见 docs/known-issues.md 第 8 条。
 [Unit]
@@ -146,7 +179,7 @@ Wants=$unit
 CONF
   $sudo mkdir -p "$root_mount/etc/systemd/system/$target.wants"
   $sudo ln -sfn "$source_unit" "$root_mount/etc/systemd/system/$target.wants/$unit"
-  say "启用 $unit（$target.d drop-in + $target.wants 链接）"
+  say "启用 $unit（$target.d/$dropin + $target.wants 链接）"
 done
 
 for entry in "${disable_units[@]}"; do

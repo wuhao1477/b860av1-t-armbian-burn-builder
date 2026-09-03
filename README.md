@@ -27,7 +27,7 @@ GitHub 上那个 `latest` 标签仍指向 `build-44.1` —— 那个包没有预
 | 登录 | `root` / `password`，SSH 直接进，不问 shell / 用户名 / 时区 |
 | 口令 | `/etc/shadow` 里钉死的 `$6$` 哈希（`openssl passwd -6 -salt b860burn password`）；删了首登向导就没人再设口令，不钉死等于发一个口令未知的包 |
 | shell | zsh 5.9 + oh-my-zsh（改 `root_shell` 一行可换 bash） |
-| 根分区 | 首次开机自动撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G，实机确认） |
+| 根分区 | 开机 `resize2fs` 撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G），`build-49.1` 起 |
 | swap | zram 400 MB（`armbian-zram-config`，`build-48.1` 起才真的起来） |
 | 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统 |
 

@@ -128,11 +128,14 @@ sudo dd if="$root_part" of="$tmp/rootfs.ext4" bs=4M status=none
 # 直接查，不挂载也不改字节。drop-in 是常规文件，缺了就让构建红；链接只打印，
 # 它是不是又掉了留给下一次实机对照。
 zram_dropin=/etc/systemd/system/sysinit.target.d/10-b860-armbian-zram-config.conf
-sudo debugfs -R "stat $zram_dropin" "$tmp/rootfs.ext4" 2>&1 | grep -q '^Inode:' || {
-  echo "zram drop-in is missing from the packaged rootfs: $zram_dropin" >&2
-  exit 1
-}
-echo "  rootfs: drop-in 已在包里 $zram_dropin"
+expand_dropin=/etc/systemd/system/multi-user.target.d/10-b860-expand-rootfs.conf
+for dropin in "$zram_dropin" "$expand_dropin"; do
+  sudo debugfs -R "stat $dropin" "$tmp/rootfs.ext4" 2>&1 | grep -q '^Inode:' || {
+    echo "drop-in is missing from the packaged rootfs: $dropin" >&2
+    exit 1
+  }
+  echo "  rootfs: drop-in 已在包里 $dropin"
+done
 sudo debugfs -R 'ls -l /etc/systemd/system/sysinit.target.wants' "$tmp/rootfs.ext4" 2>/dev/null \
   | sed 's/^/  rootfs: sysinit.target.wants: /'
 

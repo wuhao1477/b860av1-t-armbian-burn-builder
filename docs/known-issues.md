@@ -3,7 +3,8 @@
 实机（Armbian 26.11.0 / 5.10.268-ophub）已经能正常使用，下面是还没解决的。
 每条都带实测证据和修它需要动什么，方便接手的人直接开工。
 
-**还开着的：2、3、4、8。** 第 1、5、6、7 条已修复或已排除，保留下来是因为踩坑本身有价值。
+**还开着的：2、3、4、8，加第 7 条里的根分区（修好了但还没实机跑过）。**
+第 1、5、6 条已修复或已排除，保留下来是因为踩坑本身有价值。
 
 ## 1. eMMC 停在 25 MHz legacy 模式
 
@@ -155,28 +156,46 @@ dispatch 只会跑诊断 job，产不出包**，要在默认分支上才能验�
 
 ## 7. 板上手改的三项修复扛不住重刷
 
-**已修复并实机验证（`build-47.1`，2026-09-03）。** 这些项之前只改了 rootfs、没进构建，
-重刷之后全部回到出厂值。现在由 `scripts/apply-rootfs-defaults.sh` 在
+**已修复。除根分区外全部实机验证通过（`build-48.1`，2026-09-03）。** 这些项之前只改了
+rootfs、没进构建，重刷之后全部回到出厂值。现在由 `scripts/apply-rootfs-defaults.sh` 在
 `build-burn-payloads.sh` 里（rootfs 还 rw 挂着的时候）写进镜像。
 
-`build-47.1` 刷完的实测结果：
+`build-48.1` 刷完的实测结果：
 
 | 项 | 出厂 | 现在进包的做法 | 实机 |
 |---|---|---|---|
-| 首登向导 | 每次重刷都问 shell/用户/密码/locale | 删 `/root/.not_logged_in_yet` | 不再出现 ✅ |
-| root 口令 | 首登向导现场设 | 在 `/etc/shadow` 里钉死 `password` 的 `$6$` 哈希 | SSH 直接进 ✅ |
-| root shell | zsh（上游默认） | 在 `/etc/passwd` 里钉死 `/usr/bin/zsh` | `/usr/bin/zsh` ✅ |
-| 根分区 | 2.9G | 不用管，见下 | 5.1G（1351680 块，撑满 p14）✅ |
-| 开机耗时 | 41.2 s | 禁用 `NetworkManager-wait-online.service` | 24.3 s（14.3 内核 + 10.0 用户态）✅ |
-| swap | 无 | 启用 `armbian-zram-config.service` | **没起来**，见第 8 条 ❌ |
+| 首登向导 | 每次重刷都问 shell/用户/密码/locale | 删 `/root/.not_logged_in_yet` | 不再出现 ✅ `48.1` |
+| root 口令 | 首登向导现场设 | 在 `/etc/shadow` 里钉死 `password` 的 `$6$` 哈希 | SSH 直接进 ✅ `48.1` |
+| root shell | zsh（上游默认） | 在 `/etc/passwd` 里钉死 `/usr/bin/zsh` | `/usr/bin/zsh` ✅ `48.1` |
+| 开机耗时 | 41.2 s | 禁用 `NetworkManager-wait-online.service` | 用户态 8.8 s ✅ `48.1` |
+| swap | 无 | `armbian-zram-config.service`，靠 `sysinit.target.d` drop-in | zram0 400.3M ✅ `48.1` |
+| 根分区 | 2.9G，data 分区有 5.1G | `b860-expand-rootfs.service` 跑 `resize2fs`，靠 `multi-user.target.d` drop-in | `48.1` 刷完仍 2.9G ❌ —— 服务是 48.1 之后才加回来的，见下 |
 
-**根分区撑满不用我们管。** 之前这里装过一个 `b860-expand-rootfs.service` 跑
-`resize2fs`。`build-47.1` 证明它是多余的：它的 `*.wants` 链接根本没进镜像（第 8 条），
-`journalctl -b -1` 里一次都没启动过，而 p14 上的 ext4 照样从 768000 块长到了 1351680 块。
-两个显而易见的候选都不是它干的 —— `armbian-tf`（ophub 那条 `/etc/rc.local` →
-`start_service.sh` 的路）在第一步 `parted print` 就 `error_msg` 退出了，
-`/root/.no_rootfs_resize` 至今还是 `yes`；`armbian-resize-filesystem` 被
-`armbian-fix` 第 58 步关掉，首次开机的日志里也没有它。既然实机结果是对的，那套服务就删了。
+**根分区撑满得我们自己管（`build-48.1` 纠正了 `build-47.1` 的误判）。** `build-47.1`
+那次看到 p14 上的 ext4 从 768000 块长到 1351680 块，当时归因成「有别的东西在初始化阶段
+撑好了」，于是把 `b860-expand-rootfs.service` 删了。**那是错的** —— 长大是因为当时在板上
+手工跑过 `resize2fs`。`build-48.1` 刷完（只有一次开机、`journalctl -b | grep -ic resiz`
+为 0）根分区就是 raw 镜像自带的 768000 块：
+
+```
+df -h /      → /dev/mmcblk2p14  2.9G  1.7G  1.2G  58% /
+dumpe2fs -h  → Block count 768000   (× 4096 = 3.0 GiB)
+lsblk -b     → mmcblk2p14  5536481280   (= 1351680 块，差 2.1 GiB)
+```
+
+`data` 分区在 DTB 里是 `size = <0xffffffff 0xffffffff>`（「剩下的全给我」），实际大小
+取决于板上 eMMC 有多大，构建时算不出来，所以不能在构建时把 ext4 预先 resize 到某个
+常数 —— 只能在板上跑。现在 `apply-rootfs-defaults.sh` 装回了那个 oneshot：
+`resize2fs "$(findmnt -no SOURCE /)"`，不带尺寸就是撑满所在分区，已经满了打印
+`Nothing to do!` 并 exit 0，所以幂等、不需要一次性标记。靠 `multi-user.target.d/`
+的 drop-in 拉起来（这次链接不是唯一机制了，见第 8 条）。
+
+在线 resize 实测很快，不是第 7 条早先记的那种卡死：
+
+```
+resize2fs 1.47.2 … on-line resizing required
+The filesystem on /dev/mmcblk2p14 is now 1351680 (4k) blocks long.     ← 8 s 内完成
+```
 
 **为什么不用 Armbian 自带的 `armbian-resize-filesystem`**：它先用 `parted` 重算分区
 边界，而这块板的分区表来自 DTB 的 `/partitions`（Amlogic 私有格式）：
@@ -305,3 +324,9 @@ systemctl is-enabled armbian-zram-config.service → disabled              ← �
 ```
 
 所以即使链接再一次进不了镜像，`build-48.1` 的 swap 也会起来。
+
+**`build-48.1` 刷完之后再次复现了链接丢失**（干净的一次首刷，只有一次开机）：
+`/etc/systemd/system/sysinit.target.wants/` 里还是只有那四条 14-Aug 的，我们写的
+`armbian-zram-config.service` 链接和上游的 `armbian-ramlog.service` 链接都不在，
+而 drop-in 常规文件在、zram 起来了。至此这条已经是稳定可复现的行为，不是偶发：
+**在这块板上，凡是要开机自启的东西，只能靠 `<target>.d/` 里的 drop-in 常规文件。**
