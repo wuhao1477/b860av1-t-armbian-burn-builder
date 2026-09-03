@@ -166,6 +166,14 @@ dispatch 只会跑诊断 job，产不出包**，要在默认分支上才能验�
 | 开机耗时 | 41.2 s | 32.5 s | 禁用 `NetworkManager-wait-online.service`（实测省 6 s） |
 | 首登向导 | 每次重刷都问 shell/用户/密码/locale | 同左 | 删 `/root/.not_logged_in_yet` |
 | root shell | zsh（上游默认） | 同左 | 在 `/etc/passwd` 里钉死 `/usr/bin/zsh` |
+| root 口令 | 首登向导现场设 | 同左 | 在 `/etc/shadow` 里钉死 `password` 的 `$6$` 哈希 |
+
+**删首登向导必须连口令一起钉死。** 镜像里唯一会*设*口令的东西就是那个向导；只删
+`/root/.not_logged_in_yet`、不动 `/etc/shadow`，包的 root 口令就是上游 Armbian 的出厂
+哈希（向导本来会强制改掉它），谁都不知道明文是什么，实机 SSH 只会 `Permission denied`。
+`apply-rootfs-defaults.sh` 因此把 `openssl passwd -6 -salt b860burn password` 的结果写进
+去，并顺手把第 3 字段（上次改口令的天数）从 `0` 改成固定值 —— `0` 是「下次登录强制改
+口令」，留着照样会被拦一次。写完有一条后置断言，没钉上就让构建红。
 
 **为什么不用 Armbian 自带的 `armbian-resize-filesystem`**：它先用 `parted` 重算分区
 边界，而这块板的分区表来自 DTB 的 `/partitions`（Amlogic 私有格式）：

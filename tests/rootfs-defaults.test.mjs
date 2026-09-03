@@ -9,6 +9,10 @@ import { fileURLToPath } from 'node:url';
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const script = path.join(root, 'scripts/apply-rootfs-defaults.sh');
 
+// 镜像里钉死的 root 口令哈希，明文是 README 写的 password。重现：
+//   openssl passwd -6 -salt b860burn password
+const rootHash = '$6$b860burn$21d1hZz5IOJZocmktz6vVDYwbPhywU7WZtS.7vOC73/M5HGWXUs0SBGFcIbsgfQBh1MwgdtMvQyG8HO2lACOj/';
+
 // 造一个刚好够 apply-rootfs-defaults.sh 认得出来的 rootfs：
 // 上游 Armbian 里这几个文件的位置和 [Install] 段都是实机确认过的。
 function fakeRootfs(context) {
@@ -20,6 +24,10 @@ function fakeRootfs(context) {
   ]) fs.mkdirSync(path.join(directory, relative), { recursive: true });
   fs.writeFileSync(path.join(directory, 'etc/passwd'),
     'root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n');
+  // 出厂 shadow：口令被锁（`!` 前缀）且第 3 字段是 0（下次登录强制改口令）——
+  // 首登向导本来负责改掉它，删了标记就得我们自己钉。两样都要被覆盖。
+  fs.writeFileSync(path.join(directory, 'etc/shadow'),
+    'root:!$y$j9T$armbianfactory:0:0:99999:7:::\ndaemon:*:19000:0:99999:7:::\n', { mode: 0o640 });
   fs.writeFileSync(path.join(directory, 'root/.not_logged_in_yet'), '');
   fs.writeFileSync(path.join(directory, 'usr/bin/zsh'), '#!/bin/sh\n', { mode: 0o755 });
   for (const [unit, target] of [
@@ -52,6 +60,26 @@ test('rootfs defaults make the flashed image usable without a first-login wizard
   const passwd = fs.readFileSync(path.join(directory, 'etc/passwd'), 'utf8').split('\n');
   assert.equal(passwd[0], 'root:x:0:0:root:/root:/usr/bin/zsh');
   assert.equal(passwd[1], 'daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin', 'only root may be rewritten');
+  // 删掉首登标记之后没人再设口令，所以口令必须由我们钉死，否则包的 root 口令
+  // 就是上游出厂哈希 —— 实机 SSH 只会 Permission denied。
+  const shadow = fs.readFileSync(path.join(directory, 'etc/shadow'), 'utf8').split('\n');
+  assert.equal(shadow[0], `root:${rootHash}:20000:0:99999:7:::`);
+  assert.equal(shadow[1], 'daemon:*:19000:0:99999:7:::', 'only root may be rewritten');
+});
+
+test('rootfs defaults fail loudly when the root password hash does not stick', (context) => {
+  // 静默跳过这一步 = 发一个谁也进不去的包。用一个「假装写了但不写」的 sudo 桩
+  // （只吞 cp，rm 照常执行，好让首登标记那一段先过去）逼后置断言开火。
+  const directory = fakeRootfs(context);
+  const stub = path.join(directory, 'sudo-stub');
+  fs.writeFileSync(stub, '#!/bin/sh\n[ "$1" = cp ] && exit 0\nexec "$@"\n', { mode: 0o755 });
+
+  const result = childProcess.spawnSync('bash', [script, directory], {
+    encoding: 'utf8', env: { ...process.env, SUDO: stub },
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /root password hash was not applied/);
 });
 
 test('rootfs defaults fail loudly when the first-login marker survives', (context) => {

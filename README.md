@@ -23,10 +23,14 @@
 | 预置项 | 值 |
 |---|---|
 | 登录 | `root` / `password`，SSH 直接进，不问 shell / 用户名 / 时区 |
+| 口令 | `/etc/shadow` 里钉死的 `$6$` 哈希（`openssl passwd -6 -salt b860burn password`）；删了首登向导就没人再设口令，不钉死等于发一个口令未知的包 |
 | shell | zsh 5.9 + oh-my-zsh（改 `root_shell` 一行可换 bash） |
 | 根分区 | 首次开机自动 `resize2fs` 撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G），跑完自删 |
 | swap | zram（`armbian-zram-config`） |
 | 开机 | 禁用 `NetworkManager-wait-online`，省约 6 s |
+
+**这些预置要 build-46.1 之后的包才有。** 上面链接的 latest 是 build-46.1
+（2026-09-01），早于这批改动：刷完仍会跑首登向导，root 口令仍由向导现场设。
 
 WiFi 密码不进仓库（CI 产物是公开的）。要预置就在本地放 `board-inputs/wifi.env`
 写两行 `WIFI_SSID=` / `WIFI_PSK=` 再自己构建；细节见

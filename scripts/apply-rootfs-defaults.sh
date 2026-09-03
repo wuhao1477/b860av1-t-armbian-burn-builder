@@ -13,7 +13,8 @@ set -Eeuo pipefail
 usage() { echo "usage: $0 root-mount" >&2; exit 2; }
 [[ $# -eq 1 ]] || usage
 root_mount=$1
-[[ -d "$root_mount/etc/systemd/system" && -f "$root_mount/etc/passwd" ]] || {
+[[ -d "$root_mount/etc/systemd/system" && -f "$root_mount/etc/passwd" \
+   && -f "$root_mount/etc/shadow" ]] || {
   echo 'root-mount does not look like a rootfs' >&2
   exit 1
 }
@@ -21,6 +22,15 @@ root_mount=$1
 # root 的登录 shell。上游镜像本来就是 zsh（5.9 + oh-my-zsh 都已装好），这里只是
 # 钉死，免得首登向导问「1) bash 2) zsh」。要换 bash 改这一行即可。
 root_shell=/usr/bin/zsh
+
+# root 口令的 SHA-512 crypt 哈希，明文就是 README 写的 password。重现：
+#   openssl passwd -6 -salt b860burn password
+#
+# 这一步必须自己做：镜像里唯一会**设**口令的东西就是首登向导，上面把它的触发
+# 标记删掉之后，留在 /etc/shadow 里的是 Armbian 的出厂哈希（向导本来会强制改掉
+# 它）—— 不钉死就等于发一个口令未知的包，实机 SSH 只会 Permission denied。
+# 单引号是必须的，$6 会被 shell 当变量。
+root_password_hash='$6$b860burn$21d1hZz5IOJZocmktz6vVDYwbPhywU7WZtS.7vOC73/M5HGWXUs0SBGFcIbsgfQBh1MwgdtMvQyG8HO2lACOj/'
 
 # 要开/要关的 unit，写成 "unit:WantedBy 目标"。开 = 建链接，关 = 删链接。
 enable_units=(
@@ -57,7 +67,7 @@ $sudo test ! -e "$marker" || {
   exit 1
 }
 
-# ---- 2. 钉住 root 的登录 shell ------------------------------------------
+# ---- 2. 钉住 root 的登录 shell 和口令 -----------------------------------
 # 用 awk 不用 sed -i：BSD sed 的 -i 要单独带备份后缀参数，同一行命令在 macOS 上
 # 会把 -E 吃成后缀，本地自测直接失败。
 if ! grep -q "^root:.*:${root_shell}\$" "$root_mount/etc/passwd"; then
@@ -69,6 +79,28 @@ if ! grep -q "^root:.*:${root_shell}\$" "$root_mount/etc/passwd"; then
   rm -f "$passwd_tmp"
 fi
 say "root shell = $root_shell"
+
+# /etc/shadow 是 0640 root:shadow，读它也要走 $sudo —— 普通用户 awk 会直接
+# Permission denied（和上面首登标记同一个坑，只是这次会报错而不是静默）。
+root_hash_now() { $sudo awk -F: '$1 == "root" { print $2 }' "$root_mount/etc/shadow"; }
+if [[ "$(root_hash_now)" != "$root_password_hash" ]]; then
+  shadow_tmp=$(mktemp)
+  # 第 3 个字段（上次改口令距 epoch 的天数）一起写成固定值：上游留的可能是 0，
+  # 那是「下次登录强制改口令」，SSH 进去照样被拦一次，等于没做到开箱即用。
+  # 20000 = 2024-10-04，配合 max 99999 就是「已设好、不过期」。
+  $sudo awk -F: -v OFS=: -v hash="$root_password_hash" \
+    '$1 == "root" { $2 = hash; $3 = 20000 } { print }' \
+    "$root_mount/etc/shadow" > "$shadow_tmp"
+  # cp 到已存在的文件是写进原 inode，0640 root:shadow 不变。
+  $sudo cp "$shadow_tmp" "$root_mount/etc/shadow"
+  rm -f "$shadow_tmp"
+fi
+# 后置断言，同 §1：口令没钉上就是发了个进不去的包，宁可让构建红。
+[[ "$(root_hash_now)" == "$root_password_hash" ]] || {
+  echo 'root password hash was not applied: the flashed image would have an unknown password' >&2
+  exit 1
+}
+say 'root 口令 = 已钉死的 $6$ 哈希（明文见 README）'
 
 # ---- 3. 首次开机把根文件系统撑满 ----------------------------------------
 # 不能用 Armbian 自带的 armbian-resize-filesystem：它先用 parted 重算分区边界，
