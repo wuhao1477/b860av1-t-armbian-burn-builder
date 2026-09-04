@@ -14,13 +14,18 @@
 
 | 产物 | 状态 | 说明 |
 |---|---|---|
-| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-03 实机刷入、进系统、六项预置全过、eMMC DDR52 82 MB/s，见 [`docs/burn-image.md`](docs/burn-image.md) |
+| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-03 实机刷入、进系统、六项预置全过、eMMC DDR52 82 MB/s；2026-09-04 换一次刷入复验，见 [`docs/burn-image.md`](docs/burn-image.md) |
 | Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
 
-直接下载：[**latest release 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)
-（`burn.img` sha256 `2303d1c5…`，即下面表里的 `build-49.1`，六项预置全部实机验证通过：
+直接下载：[**`v1.0.0` 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)
+（解压后 `burn.img` sha256 `2303d1c5…`，六项预置全部实机验证通过：
 `root` / `password` 直接 SSH、zsh、根分区 5.1G、zram 400 MB、无首登向导、不等网络）。
 刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
+
+**只有 `v1.0.0` 一个 release。** 之前那批预置不完整的 `b860-burn-*` prerelease
+（`build-43.1` … `build-49.1`）已全部删除，避免有人下错来刷；`v1.0.0` 就是
+`build-49.1` 那份实机验证过的字节，同一个 sha256。各项预置是怎么一步步补齐的，
+记在 [`docs/known-issues.md`](docs/known-issues.md) 第 7 条。
 
 **刷完直接能用，没有首次开机向导。** 镜像里由
 [`scripts/apply-rootfs-defaults.sh`](scripts/apply-rootfs-defaults.sh) 预置好：
@@ -31,27 +36,13 @@
 | 口令 | `/etc/shadow` 里钉死的 `$6$` 哈希（`openssl passwd -6 -salt b860burn password`）；删了首登向导就没人再设口令，不钉死等于发一个口令未知的包 |
 | shell | zsh 5.9 + oh-my-zsh（改 `root_shell` 一行可换 bash） |
 | 根分区 | 首次开机 `resize2fs` 自己撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G，实机确认） |
-| swap | zram 400 MB（`armbian-zram-config`，`build-48.1` 起才真的起来） |
-| 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统 |
+| swap | zram 400 MB（`armbian-zram-config`，靠 `sysinit.target.d` drop-in 起来） |
+| 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统（首刷含 resize 30.6 s） |
 
-**别按 tag 名去挑历史 prerelease。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
-序号（中间那个 `build-46.1` 是上游 raw release，别混）。仓库里还留着几个预置不完整的
-prerelease，下面这张表说明哪些不能刷 —— 下 `latest` 就不用管它：
-
-| 运行 | 预置 | 刷完能不能进系统 |
-|---|---|---|
-| `build-44.1` | 无 | 能，走首登向导现场设口令 |
-| `build-45.1` | 有，但首登标记没真删掉 | 能，同上 |
-| `build-46.1` | 有，标记删了却**没钉口令** | **不能** —— root 口令是上游出厂哈希，明文未知 |
-| `build-47.1` | 除 swap 全部实机验证通过 | 能，`root` / `password`；只是没有 swap |
-| `build-48.1` | 差根分区没撑满（2.9G）；其余 5 项实机验证通过 | 能 |
-| **`build-49.1`（= `v1.0.0`，latest release）** | 完整，六项全部实机验证通过 | 能 |
-
-`build-47.1` 的完整实机结果、以及 swap 为什么没起来（构建时写进 rootfs 的 `*.wants`
-符号链接一条都没进镜像，同一毫秒写的常规文件全在），见
-[`docs/known-issues.md`](docs/known-issues.md) 第 7、8 条。换成 drop-in 的那条路已经
-在实机上单独验证过：把链接删干净、只留 `sysinit.target.d/` 里的 drop-in，冷重启后
-`swapon --show` 就是 `/dev/zram0 400.3M`。
+swap 为什么一开始没起来（构建时写进 rootfs 的 `*.wants` 符号链接一条都没进镜像，同一
+毫秒写的常规文件全在），见 [`docs/known-issues.md`](docs/known-issues.md) 第 7、8 条。
+换成 drop-in 的那条路已经在实机上验证过三次：`sysinit.target.wants/` 里的链接照旧
+不见，冷重启后 `swapon --show` 仍是 `/dev/zram0 400.3M`。
 
 WiFi 密码不进仓库（CI 产物是公开的）。要预置就在本地放 `board-inputs/wifi.env`
 写两行 `WIFI_SSID=` / `WIFI_PSK=` 再自己构建；细节见
