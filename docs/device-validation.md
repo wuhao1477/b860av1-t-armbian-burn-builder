@@ -17,7 +17,7 @@ Download the five small evidence assets for the exact Release. The image is
 not downloaded:
 
 ```bash
-repo='wuhao1477/b860av1-t-armbian-builder'
+repo='wuhao1477/b860av1-t-armbian-burn-builder'
 tag='armbian-26.08.0-debian-13.6-trixie-k5.10.260-build-37.1'
 assets_dir="release-assets/$tag"
 mkdir -p "$assets_dir"

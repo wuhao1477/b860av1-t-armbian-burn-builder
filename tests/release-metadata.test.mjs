@@ -112,7 +112,7 @@ function metadataInput(input) {
 test('derives collector metadata from bound Release evidence', () => {
   const input = fixture();
   assert.deepEqual(buildReleaseMetadata(metadataInput(input)), {
-    repository: 'wuhao1477/b860av1-t-armbian-builder',
+    repository: 'wuhao1477/b860av1-t-armbian-burn-builder',
     tag: input.tag,
     image: input.image,
     imageSha256: input.imageSha256,

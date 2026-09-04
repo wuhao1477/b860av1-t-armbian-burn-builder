@@ -5,7 +5,7 @@ import { canonicalStringify } from './canonical-json.mjs';
 import { validatePublishedState } from './change-detection.mjs';
 import { validateReleaseTag } from './release.mjs';
 
-const REPOSITORY = 'wuhao1477/b860av1-t-armbian-builder';
+const REPOSITORY = 'wuhao1477/b860av1-t-armbian-burn-builder';
 const IDENTITY_PATH = './usr/lib/b860av1-t/image-identity.json';
 const SHA256 = /^[0-9a-f]{64}$/;
 const KERNEL_RELEASE = /^\d+\.\d+\.\d+-[A-Za-z0-9][A-Za-z0-9._+~-]*$/;

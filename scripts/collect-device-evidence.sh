@@ -67,7 +67,7 @@ const fields = [
   'kernelVersion', 'kernelRelease', 'identitySha256',
 ];
 const required = {
-  repository: /^wuhao1477\/b860av1-t-armbian-builder$/,
+  repository: /^wuhao1477\/b860av1-t-armbian-burn-builder$/,
   tag: /^armbian-[A-Za-z0-9._+-]+-debian-[A-Za-z0-9._+-]+-k\d+\.\d+\.\d+-build-\d+\.\d+$/,
   image: /^Armbian_[A-Za-z0-9._+-]+\.img\.gz$/,
   imageSha256: /^[0-9a-f]{64}$/,

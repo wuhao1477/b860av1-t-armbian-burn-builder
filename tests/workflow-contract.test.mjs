@@ -375,10 +375,13 @@ test('burn workflow builds the vendor-boot package from the frozen raw release',
   ]) {
     assert.match(recipeList, new RegExp(recipeInput.replaceAll('.', '\\.')));
   }
-  assert.match(workflow, /SOURCE_REPOSITORY:\s*wuhao1477\/b860av1-t-armbian-builder/);
+  // 输入自托管：raw 资产镜像在本仓库的 input-* release，不再依赖另一个仓库活着。
+  assert.match(workflow, /SOURCE_REPOSITORY:\s*wuhao1477\/b860av1-t-armbian-burn-builder/);
   // 输入冻结在实机验证过的那一份 raw release，detect 只核对、不再挑最新。
   // 自洽性（tag / 资产名 / 摘要 / 文档）由 integration-contract 那条测试守着。
-  assert.match(workflow, /SOURCE_RELEASE:\s*armbian-/);
+  // 合并后 raw 线也在本仓库，所以 tag 可能是自产的 armbian-* 或镜像进来的 input-armbian-*，
+  // 但必须是一个具体 tag —— 不能退回「挑最新的」。
+  assert.match(workflow, /SOURCE_RELEASE:\s*(?:input-)?armbian-\S+/);
   assert.match(workflow, /gh api "repos\/\$SOURCE_REPOSITORY\/releases\/tags\/\$release_tag"/);
   assert.match(workflow, /gh release download "\$PUBLIC_RELEASE" --repo "\$SOURCE_REPOSITORY"/);
   assert.match(workflow, /gh release create[^\n]+--draft/);

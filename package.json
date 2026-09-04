@@ -1,10 +1,10 @@
 {
-  "name": "b860av1-t-armbian-builder",
+  "name": "b860av1-t-armbian-burn-builder",
   "version": "0.1.0",
   "description": "Reproducible GitHub Actions builds of Debian Trixie Armbian candidates for ZTE B860AV1.1-T",
   "private": true,
   "license": "MIT",
-  "repository": "github:wuhao1477/b860av1-t-armbian-builder",
+  "repository": "github:wuhao1477/b860av1-t-armbian-burn-builder",
   "packageManager": "pnpm@11.6.0",
   "type": "module",
   "engines": {

@@ -14,7 +14,7 @@ const REQUIRED_ASSETS = [
   'validation-report.json', 'filesystem-manifest.sha256', 'boot-components.json',
 ];
 const IDENTITY_PATH = '/usr/lib/b860av1-t/image-identity.json';
-const REPOSITORY = 'wuhao1477/b860av1-t-armbian-builder';
+const REPOSITORY = 'wuhao1477/b860av1-t-armbian-burn-builder';
 
 function readJson(file) {
   return JSON.parse(readFileSync(file, 'utf8'));

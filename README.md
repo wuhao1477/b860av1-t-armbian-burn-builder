@@ -103,24 +103,29 @@ gh workflow run verify-device.yml \
 
 通过后只为该 Release 增加 `operator-attested / one-device` 资产；原始 `validation-report.json` 继续保持 `container-valid / hardware-unverified`。这是单台设备的操作者证据，不是远程密码学硬件证明，也不代表所有硬件批次已经适配。
 
-本仓库公开发布的是 USB Burning Tool 的 `burn.img.xz`（raw `.img.gz` 由上游那个仓库发）；直刷包随附 `vendor-boot-contract.json`（Android boot 头部、cmdline、root UUID）和 `burn-dtb-contract.json`（`meson1.dtb` 的 7 个 sub-DTB 槽位与替换结果），再加一份 `SHA256SUMS`。CI 里的自动校验只能证明容器结构和设备树自洽；变体 C 的可启动结论来自机主实机刷入，不是构建成功推出来的。设备证据流程仍只针对 raw 镜像。
+本仓库发布两类包：USB Burning Tool 的 `burn.img.xz`（`b860-burn-*`）和 raw `.img.gz`（`armbian-*`，直刷包的输入源）。直刷包随附 `vendor-boot-contract.json`（Android boot 头部、cmdline、root UUID）和 `burn-dtb-contract.json`（`meson1.dtb` 的 7 个 sub-DTB 槽位与替换结果），再加一份 `SHA256SUMS`。CI 里的自动校验只能证明容器结构和设备树自洽；变体 C 的可启动结论来自机主实机刷入，不是构建成功推出来的。设备证据流程仍只针对 raw 镜像。
 
 ## 自动构建
 
-两个仓库，别混：
+**一个仓库，两条线。** 以前 raw 那条线在
+[`b860av1-t-armbian-builder`](https://github.com/wuhao1477/b860av1-t-armbian-builder)，
+那个仓库其实是本仓库的子集（119 个文件里 94 个逐字节相同），两边还在跑同一条 cron
+出同一份 raw 包。已经合并到本仓库并把它 archive 了。
 
-| 仓库 | 产出 | workflow |
+| 线 | 产出 | workflow |
 |---|---|---|
-| [`b860av1-t-armbian-builder`](https://github.com/wuhao1477/b860av1-t-armbian-builder) | raw `armbian-*` release（本仓库的输入） | 那边的 `weekly-build.yml` |
-| 本仓库 | `b860-burn-*` 直刷包 | [`weekly-burn-build.yml`](.github/workflows/weekly-burn-build.yml) |
+| 直刷包 | `b860-burn-*` release（`burn.img.xz`） | [`weekly-burn-build.yml`](.github/workflows/weekly-burn-build.yml) |
+| raw 镜像 | `armbian-*` prerelease（直刷包的输入源） | [`weekly-build.yml`](.github/workflows/weekly-build.yml) |
 
-本仓库也带一份休眠的 raw 构建线（`weekly-build.yml`、[`config/sources.json`](config/sources.json)、
-`scripts/build-raw-image.sh`），当前不发 raw 包，留着是为了两条线的输入口径一致。
+直刷包的输入不再跨仓库取：那份实机验证过的 raw 资产逐字节镜像在本仓库的
+[`input-armbian-…-build-46.1`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/tag/input-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1)
+里，`SOURCE_DIGEST` 与合并前完全一致。
 
-**直刷包的输入是冻结的。** `weekly-burn-build.yml` 顶部钉死 `SOURCE_RELEASE` /
-`SOURCE_ASSET` / `SOURCE_DIGEST`，`detect` 只核对不选新；`config/sources.json` 把内核钉在
-`5.10.268` 并校验摘要。上游改了东西 CI 会红，不会自己出新包 ——
-重钉步骤见 [`docs/frozen-inputs.md`](docs/frozen-inputs.md)。
+**直刷包的输入是冻结的。** `weekly-burn-build.yml` 顶部钉死 `SOURCE_REPOSITORY` /
+`SOURCE_RELEASE` / `SOURCE_ASSET` / `SOURCE_DIGEST`，`detect` 只核对不选新；
+`config/sources.json` 把内核钉在 `5.10.268` 并校验摘要。输入变了 CI 会红，不会自己出新包 ——
+重钉步骤见 [`docs/frozen-inputs.md`](docs/frozen-inputs.md)。raw 那条线每周照常跑，
+但它产出的新 `armbian-*` 包不会自动成为直刷包的输入。
 
 下面出现两个独立编号的 schema，不要混淆：
 
@@ -152,7 +157,7 @@ gh workflow run verify-device.yml \
 手动启动直刷包构建：打开 [Weekly burn image](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/weekly-burn-build.yml)，
 选择 **Run workflow**，把 `force` 设为 `true`。必须在默认分支上跑 —— `detect` 带
 `if: github.ref_name == default_branch`，feature 分支只会跑诊断 job，产不出包。
-raw 那条线在[另一个仓库](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/weekly-build.yml)。
+raw 那条线是同一个仓库里的 [`weekly-build.yml`](.github/workflows/weekly-build.yml)。
 
 ## burn.img 直刷包
 

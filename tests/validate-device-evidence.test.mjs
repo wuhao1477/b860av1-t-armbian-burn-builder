@@ -32,7 +32,7 @@ function report() {
       compatible: ['amlogic,p212'],
     },
     release: {
-      repository: 'wuhao1477/b860av1-t-armbian-builder',
+      repository: 'wuhao1477/b860av1-t-armbian-burn-builder',
       tag: 'armbian-26.08.0-debian-13.6-trixie-k5.10.260-build-36.1',
       image: 'Armbian_26.08.0_amlogic_b860av1-t_trixie_5.10.260_server_2026.07.22.img.gz',
       imageSha256: 'c'.repeat(64), rawSha256: 'd'.repeat(64), manifestFingerprint: fingerprint,
@@ -42,7 +42,7 @@ function report() {
       manifestFingerprint: fingerprint, kernelVersion: '5.10.260', kernelRelease,
     },
     collector: {
-      repository: 'wuhao1477/b860av1-t-armbian-builder', commit: 'f'.repeat(40),
+      repository: 'wuhao1477/b860av1-t-armbian-burn-builder', commit: 'f'.repeat(40),
       scriptPath: 'scripts/collect-device-evidence.sh', scriptSha256: '1'.repeat(64),
     },
     boot: {
@@ -148,9 +148,9 @@ async function completeFixture(root) {
   const collectorCommit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const collectorSource = execFileSync('git', ['show', `${collectorCommit}:scripts/collect-device-evidence.sh`]);
   const evidence = report();
-  evidence.release = { repository: 'wuhao1477/b860av1-t-armbian-builder', tag, image, imageSha256: imageSha, rawSha256: rawSha, manifestFingerprint: manifest.fingerprint };
+  evidence.release = { repository: 'wuhao1477/b860av1-t-armbian-burn-builder', tag, image, imageSha256: imageSha, rawSha256: rawSha, manifestFingerprint: manifest.fingerprint };
   evidence.identity = { path: '/usr/lib/b860av1-t/image-identity.json', sha256: identitySha, manifestFingerprint: manifest.fingerprint, kernelVersion: '5.10.260', kernelRelease: '5.10.260-ophub' };
-  evidence.collector = { repository: 'wuhao1477/b860av1-t-armbian-builder', commit: collectorCommit, scriptPath: 'scripts/collect-device-evidence.sh', scriptSha256: sha256(collectorSource) };
+  evidence.collector = { repository: 'wuhao1477/b860av1-t-armbian-burn-builder', commit: collectorCommit, scriptPath: 'scripts/collect-device-evidence.sh', scriptSha256: sha256(collectorSource) };
   evidence.serial.sha256 = sha256(serial);
   await writeFile(path.join(evidenceDir, 'device-validation.json'), `${JSON.stringify(evidence)}\n`);
   await writeFile(path.join(evidenceDir, 'device-serial.log'), serial);

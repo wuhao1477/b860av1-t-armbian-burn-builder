@@ -10,7 +10,8 @@
 
 | 输入 | 钉死的值 | 钉在哪 |
 |---|---|---|
-| raw release | `armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1` | `SOURCE_RELEASE` |
+| raw release 所在仓库 | `wuhao1477/b860av1-t-armbian-burn-builder`（就是本仓库） | `SOURCE_REPOSITORY` |
+| raw release | `input-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1` | `SOURCE_RELEASE` |
 | raw 资产 | `Armbian_26.11.0_amlogic_b860av1-t_trixie_5.10.268_server_2026.08.31.img.gz` | `SOURCE_ASSET` |
 | raw 资产 sha256 | `32f5b8079e6c5ff8642e0703cfc0a8ae4402b1057b46bb3b8ce7181283da6ace`（781,108,291 B） | `SOURCE_DIGEST` |
 | 内核 | `5.10.268`，sha256 `d3559323a4812600ab8f2bd0156d2b863c9b1ea3627d59d64890b8498621e49f`（80,862,597 B） | `config/sources.json` 的 `kernel` |
@@ -19,9 +20,16 @@
 | ampack / gxlimg | `config/burn-tooling.json` 里的 commit | 一直是钉死的 |
 | 原厂固件片段 | `board-inputs/`，白名单在 `config/burn-inputs.json` | 一直是钉死的 |
 
-前三个在 [`.github/workflows/weekly-burn-build.yml`](../.github/workflows/weekly-burn-build.yml)
-顶部的 `env:` 里。它们决定直刷包；`config/sources.json` 决定的是 raw 镜像那条线
-（`weekly-build.yml`），本仓库当前不发 raw 包，钉它是为了两条线不打架。
+**输入是自托管的。** 这份 raw 资产原本在 `b860av1-t-armbian-builder` 的
+`armbian-…-build-46.1` 里；那个仓库是本仓库的子集，已经合并并 archive，资产逐字节镜像到
+本仓库的 `input-*` release，所以 `SOURCE_DIGEST` 与合并前完全一致。`input-` 这个前缀是
+刻意的 —— `weekly-build.yml` 的历史审计按 `armbian-` 前缀筛，`weekly-burn-build.yml` 按
+`b860-burn-` 筛，镜像进来的输入不该被任何一条当成自己的产物。
+
+前四个在 [`.github/workflows/weekly-burn-build.yml`](../.github/workflows/weekly-burn-build.yml)
+顶部的 `env:` 里，它们决定直刷包。`config/sources.json` 决定的是 raw 镜像那条线
+（`weekly-build.yml`，同一个仓库，每周一照常跑）—— 它产出的新 `armbian-*` 包**不会**
+自动成为直刷包的输入，要换得走下面的重钉流程。
 
 产出：`burn.img` sha256 `2303d1c58b0061e9a70d6159e27e546c382d06cf792f3680d69f3659b8f02822`，
 六项预置全部实机验证通过（见 [`docs/burn-image.md`](burn-image.md)）。
@@ -38,18 +46,21 @@
 `assetPattern` 现在是完整文件名（`^5\.10\.268\.tar\.gz$`）。`selectLatestAsset` 不带
 版本提取器时只接受**恰好一个**匹配，所以多出一个候选就是硬报错，不会「挑个最大的」。
 
-## 怎么重钉（跟一个新的 raw release）
+## 怎么重钉（跟一份新的 raw release）
+
+raw 线现在和直刷包在同一个仓库，所以新的 raw release 直接就在本仓库的 release 列表里，
+不需要再镜像一次 —— `SOURCE_RELEASE` 指向那个 `armbian-*` tag 就行。
 
 1. 挑一份新的 raw release，把 tag / 资产名 / 摘要读出来：
 
    ```bash
-   gh api repos/wuhao1477/b860av1-t-armbian-builder/releases \
-     --jq '.[] | select(.draft == false) | {tag: .tag_name,
+   gh api repos/wuhao1477/b860av1-t-armbian-burn-builder/releases \
+     --jq '.[] | select(.draft == false and (.tag_name | startswith("armbian-"))) | {tag: .tag_name,
            asset: (.assets[] | select(.name | test("^Armbian_.*\\.img\\.gz$")) | {name, size, digest})}'
    ```
 
 2. 改 `weekly-burn-build.yml` 顶部的 `SOURCE_RELEASE` / `SOURCE_ASSET` / `SOURCE_DIGEST`
-   三行（`SOURCE_DIGEST` 去掉 `sha256:` 前缀）。
+   三行（`SOURCE_DIGEST` 去掉 `sha256:` 前缀）。`SOURCE_REPOSITORY` 不用动。
 3. 内核跟着变就同改 `config/sources.json` 的 `kernel.version` / `kernel.assetPattern`
    / `kernel.digest`：
 

@@ -61,7 +61,7 @@ test('collects six fixture capabilities without block-device writes', async () =
     const identityText = `${JSON.stringify(identity, null, 2)}\n`;
     await put(fixture, 'usr/lib/b860av1-t/image-identity.json', identityText);
     const metadata = {
-      repository: 'wuhao1477/b860av1-t-armbian-builder',
+      repository: 'wuhao1477/b860av1-t-armbian-burn-builder',
       tag: 'armbian-26.08.0-debian-13.6-trixie-k5.10.260-build-36.1',
       image: 'Armbian_26.08.0_amlogic_b860av1-t_trixie_5.10.260_server_2026.07.22.img.gz',
       imageSha256: 'c'.repeat(64),

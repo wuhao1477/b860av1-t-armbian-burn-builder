@@ -4,7 +4,7 @@ export const DEVICE_EVIDENCE_SCHEMA = 1;
 export const CAPABILITIES = ['emmc', 'ethernet', 'hdmi', 'infrared', 'usb', 'wifi'];
 export const MAX_DEVICE_LOG_BYTES = 2 * 1024 * 1024;
 
-const REPOSITORY = 'wuhao1477/b860av1-t-armbian-builder';
+const REPOSITORY = 'wuhao1477/b860av1-t-armbian-burn-builder';
 const EVIDENCE_ID = /^[0-9a-f]{16}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
 const KERNEL_VERSION = /^\d+\.\d+\.\d+$/;
