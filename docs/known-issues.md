@@ -156,20 +156,29 @@ dispatch 只会跑诊断 job，产不出包**，要在默认分支上才能验�
 
 ## 7. 板上手改的三项修复扛不住重刷
 
-**已修复。除根分区外全部实机验证通过（`build-48.1`，2026-09-03）。** 这些项之前只改了
-rootfs、没进构建，重刷之后全部回到出厂值。现在由 `scripts/apply-rootfs-defaults.sh` 在
+**已修复并实机验证（`build-49.1`，2026-09-03）。** 这些项之前只改了 rootfs、没进构建，
+重刷之后全部回到出厂值。现在由 `scripts/apply-rootfs-defaults.sh` 在
 `build-burn-payloads.sh` 里（rootfs 还 rw 挂着的时候）写进镜像。
 
-`build-48.1` 刷完的实测结果：
+`build-48.1` / `build-49.1` 刷完的实测结果：
 
 | 项 | 出厂 | 现在进包的做法 | 实机 |
 |---|---|---|---|
-| 首登向导 | 每次重刷都问 shell/用户/密码/locale | 删 `/root/.not_logged_in_yet` | 不再出现 ✅ `48.1` |
-| root 口令 | 首登向导现场设 | 在 `/etc/shadow` 里钉死 `password` 的 `$6$` 哈希 | SSH 直接进 ✅ `48.1` |
-| root shell | zsh（上游默认） | 在 `/etc/passwd` 里钉死 `/usr/bin/zsh` | `/usr/bin/zsh` ✅ `48.1` |
-| 开机耗时 | 41.2 s | 禁用 `NetworkManager-wait-online.service` | 用户态 8.8 s ✅ `48.1` |
-| swap | 无 | `armbian-zram-config.service`，靠 `sysinit.target.d` drop-in | zram0 400.3M ✅ `48.1` |
-| 根分区 | 2.9G，data 分区有 5.1G | `b860-expand-rootfs.service` 跑 `resize2fs`，靠 `multi-user.target.d` drop-in | `48.1` 刷完仍 2.9G ❌ —— 服务是 48.1 之后才加回来的，见下 |
+| 首登向导 | 每次重刷都问 shell/用户/密码/locale | 删 `/root/.not_logged_in_yet` | 不再出现 ✅ `49.1` |
+| root 口令 | 首登向导现场设 | 在 `/etc/shadow` 里钉死 `password` 的 `$6$` 哈希 | SSH 直接进 ✅ `49.1` |
+| root shell | zsh（上游默认） | 在 `/etc/passwd` 里钉死 `/usr/bin/zsh` | `/usr/bin/zsh` ✅ `49.1` |
+| 开机耗时 | 41.2 s | 禁用 `NetworkManager-wait-online.service` | 用户态 8.8 s ✅ `48.1`（首刷那次 17.3 s，含 resize 和首启动作） |
+| swap | 无 | `armbian-zram-config.service`，靠 `sysinit.target.d` drop-in | zram0 400.3M ✅ `48.1` `49.1` |
+| 根分区 | 2.9G，data 分区有 5.1G | `b860-expand-rootfs.service` 跑 `resize2fs`，靠 `multi-user.target.d` drop-in | 首次开机自己撑到 5.1G ✅ `49.1` |
+
+`build-49.1` 首刷第一次开机，服务自己干完了（时间戳是 fake-hwclock 的，板上没 RTC）：
+
+```
+Aug 31 10:17:12 b860-expand-rootfs[1435]: Filesystem at /dev/mmcblk2p14 is mounted on /; on-line resizing required
+Aug 31 10:17:12 b860-expand-rootfs[1435]: The filesystem on /dev/mmcblk2p14 is now 1351680 (4k) blocks long.
+Aug 31 10:17:12 systemd[1]: Finished b860-expand-rootfs.service
+df -h /  → /dev/mmcblk2p14  5.1G  1.7G  3.4G  33% /
+```
 
 **根分区撑满得我们自己管（`build-48.1` 纠正了 `build-47.1` 的误判）。** `build-47.1`
 那次看到 p14 上的 ext4 从 768000 块长到 1351680 块，当时归因成「有别的东西在初始化阶段
@@ -325,8 +334,24 @@ systemctl is-enabled armbian-zram-config.service → disabled              ← �
 
 所以即使链接再一次进不了镜像，`build-48.1` 的 swap 也会起来。
 
-**`build-48.1` 刷完之后再次复现了链接丢失**（干净的一次首刷，只有一次开机）：
-`/etc/systemd/system/sysinit.target.wants/` 里还是只有那四条 14-Aug 的，我们写的
-`armbian-zram-config.service` 链接和上游的 `armbian-ramlog.service` 链接都不在，
-而 drop-in 常规文件在、zram 起来了。至此这条已经是稳定可复现的行为，不是偶发：
-**在这块板上，凡是要开机自启的东西，只能靠 `<target>.d/` 里的 drop-in 常规文件。**
+**`build-49.1` 又把范围缩小了：丢失是「针对某个目录」的，不是针对所有链接。**
+同一次构建、同一个脚本、同一个 `ln -sfn`，写进两个不同目录的两条链接，实机上一条活一条死：
+
+```
+/etc/systemd/system/multi-user.target.wants/b860-expand-rootfs.service   ← 活着（mtime 就是构建时间 08:14 UTC）
+/etc/systemd/system/sysinit.target.wants/armbian-zram-config.service     ← 没了
+/etc/systemd/system/sysinit.target.wants/armbian-ramlog.service          ← 也没了（上游的）
+```
+
+`sysinit.target.wants/` 里只剩那四条 14-Aug 的。所以「我们写链接的方式不对」和
+「sparse / Burning Tool 丢符号链接」两种解释都不成立 —— 它们不会只挑一个目录下手。
+剩下的怀疑集中在 `sysinit.target.wants` 这个目录本身（初始化早期有东西在动它，
+journald 起来之前，所以日志里看不到）。
+
+已经排除掉的新候选：`armbian-fix` 全文只 `mask sleep/suspend/hibernate`、
+`disable motd-news / armbian-resize-filesystem / ssh.socket / serial-getty@*`，
+没有 ramlog / zram；本次开机日志里 `disab|mask` 也没有 ramlog / zram 的记录。
+
+**结论没变，而且现在有两次实机证据支持**：开机自启只能靠 `<target>.d/` 里的 drop-in
+常规文件。两条 drop-in（`sysinit.target.d` 的 zram、`multi-user.target.d` 的
+expand-rootfs）在 `build-49.1` 上都按预期起来了。
