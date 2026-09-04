@@ -356,6 +356,11 @@ journald 起来之前，所以日志里看不到）。
 常规文件。两条 drop-in（`sysinit.target.d` 的 zram、`multi-user.target.d` 的
 expand-rootfs）在 `build-49.1` 上都按预期起来了。
 
+**`v1.0.0` 首刷第三次复现，一模一样（2026-09-04）。** 同一份镜像换一次刷入，
+`sysinit.target.wants/` 里的 zram 链接又没了、`multi-user.target.wants/` 里的
+expand 链接又活着；两个服务都靠 drop-in 起来了，`swapon --show` 是 `/dev/zram0 400.3M`，
+根分区首次开机自己撑到 5.1G。所以这是稳定可复现的目录级现象，不是偶发。
+
 ## 9. 内核线 2026-12-31 EOL，且没有保住 WiFi 的升级路线
 
 **已知、无解，只能等移植。** 当前钉死在 5.10.268（[`frozen-inputs.md`](frozen-inputs.md)）。
