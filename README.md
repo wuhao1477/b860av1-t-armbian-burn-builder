@@ -107,17 +107,16 @@ gh workflow run verify-device.yml \
 
 ## 自动构建
 
-**一个仓库，两条线。** 以前 raw 那条线在
-[`b860av1-t-armbian-builder`](https://github.com/wuhao1477/b860av1-t-armbian-builder)，
-那个仓库其实是本仓库的子集（119 个文件里 94 个逐字节相同），两边还在跑同一条 cron
-出同一份 raw 包。已经合并到本仓库并把它 archive 了。
+**一个仓库，两条线。** 早期 raw 那条线在另一个仓库，那个仓库其实是本仓库的子集
+（119 个文件里 94 个逐字节相同），两边还在跑同一条 cron 出同一份 raw 包。已经合并进
+本仓库，原仓库转为私有，不再产出任何东西。构建、发布、实机证据全部只依赖本仓库。
 
 | 线 | 产出 | workflow |
 |---|---|---|
 | 直刷包 | `b860-burn-*` release（`burn.img.xz`） | [`weekly-burn-build.yml`](.github/workflows/weekly-burn-build.yml) |
 | raw 镜像 | `armbian-*` prerelease（直刷包的输入源） | [`weekly-build.yml`](.github/workflows/weekly-build.yml) |
 
-直刷包的输入不再跨仓库取：那份实机验证过的 raw 资产逐字节镜像在本仓库的
+直刷包的输入自托管：那份实机验证过的 raw 资产逐字节镜像在本仓库的
 [`input-armbian-…-build-46.1`](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/tag/input-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1)
 里，`SOURCE_DIGEST` 与合并前完全一致。
 

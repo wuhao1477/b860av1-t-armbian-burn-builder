@@ -20,10 +20,10 @@
 | ampack / gxlimg | `config/burn-tooling.json` 里的 commit | 一直是钉死的 |
 | 原厂固件片段 | `board-inputs/`，白名单在 `config/burn-inputs.json` | 一直是钉死的 |
 
-**输入是自托管的。** 这份 raw 资产原本在 `b860av1-t-armbian-builder` 的
-`armbian-…-build-46.1` 里；那个仓库是本仓库的子集，已经合并并 archive，资产逐字节镜像到
-本仓库的 `input-*` release，所以 `SOURCE_DIGEST` 与合并前完全一致。`input-` 这个前缀是
-刻意的 —— `weekly-build.yml` 的历史审计按 `armbian-` 前缀筛，`weekly-burn-build.yml` 按
+**输入是自托管的。** 这份 raw 资产早期由另一个仓库的 `armbian-…-build-46.1` 托管；那个
+仓库是本仓库的子集，已经合并进来、原仓库转为私有，资产逐字节镜像到本仓库的 `input-*`
+release，所以 `SOURCE_DIGEST` 与合并前完全一致。`input-` 这个前缀是刻意的 ——
+`weekly-build.yml` 的历史审计按 `armbian-` 前缀筛，`weekly-burn-build.yml` 按
 `b860-burn-` 筛，镜像进来的输入不该被任何一条当成自己的产物。
 
 前四个在 [`.github/workflows/weekly-burn-build.yml`](../.github/workflows/weekly-burn-build.yml)

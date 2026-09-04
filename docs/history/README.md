@@ -5,6 +5,13 @@
 
 不要按这些文档实现新功能 —— 它们描述的是 raw SD 镜像那条线，且早于直刷包的全部发现。
 
+**里面的仓库名已经过时。** 这些文档写于 raw 那条线还在另一个仓库的时候，正文和 JSON
+示例里出现的 `wuhao1477/b860av1-t-armbian-builder` 指的就是那个仓库：它已经合并进本仓库、
+转为私有，公开地址打不开。当前唯一有效的仓库常量是
+`wuhao1477/b860av1-t-armbian-burn-builder`（见 `src/device-evidence.mjs`、
+`src/release-metadata.mjs`、`scripts/validate-device-evidence.mjs`）。这里的旧名字刻意
+不改 —— 历史记录改了就不是记录了。
+
 ## 归档的分支
 
 早期的实验分支都已删除，删之前打了 `archive/<原分支名>` 的附注 tag，提交对象因此仍然

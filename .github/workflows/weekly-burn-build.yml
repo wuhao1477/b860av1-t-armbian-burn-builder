@@ -18,8 +18,8 @@ env:
   # 直刷包的输入冻结在实机验证过的那一份 raw release，不再自己漂到「最新的 armbian-*」。
   # 改下面三个值就是解冻；它们进 recipe_digest，所以改完下一次运行必然重建。
   # 冻结集合、证据和解冻步骤见 docs/frozen-inputs.md。
-  # 输入自托管：这份 raw release 原本在 b860av1-t-armbian-builder，那个仓库已 archive，
-  # 资产逐字节镜像到本仓库的 input-* release，所以 SOURCE_DIGEST 不变。
+  # 输入自托管：这份 raw release 早期由另一个仓库托管，那条线已经合并进本仓库、
+  # 原仓库转为私有；资产逐字节镜像到本仓库的 input-* release，所以 SOURCE_DIGEST 不变。
   SOURCE_REPOSITORY: wuhao1477/b860av1-t-armbian-burn-builder
   SOURCE_RELEASE: input-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1
   SOURCE_ASSET: Armbian_26.11.0_amlogic_b860av1-t_trixie_5.10.268_server_2026.08.31.img.gz
