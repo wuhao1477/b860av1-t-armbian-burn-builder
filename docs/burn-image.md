@@ -189,6 +189,18 @@ bootloader 4M@0  →  reserved 64M@36M  →  cache（提到最前，从 108M 起
 | B | 原厂签名段 + ophub BL33 + rootfs 内 `/boot` | `build-ophub-bl33-burn.sh` | 实机全黑，根因 1 |
 | C | 厂商 bootloader 逐字节不改 + Android boot 镜像 | `build-vendor-boot-burn.sh` | **实机可启动** |
 
+那段全黑期的开发分支没有合进 `main`，也不占 tag / 分支列表，存在远端的 `refs/archive/*`
+下面（`git push --tags` 碰不到它们）。要翻当时的实现：
+
+```bash
+git fetch origin 'refs/archive/*:refs/archive/*'
+git log --oneline main..refs/archive/codex-fix-b860-emmc-50mhz      # 改用 R3300L 参考启动链
+git log --oneline main..refs/archive/codex-restore-stock-bl33       # 原厂内核诊断包
+git log --oneline main..refs/archive/feat-diagnostic-hdmi-console   # HDMI 诊断 / SD 卡启动
+```
+
+结论本身都在这一页和 [`known-issues.md`](known-issues.md) 里，翻分支只在要复现测量时才需要。
+
 ## 构建与校验
 
 ```bash
