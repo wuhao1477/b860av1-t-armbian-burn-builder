@@ -5,16 +5,28 @@ Burning Tool 能直接刷的 `burn.img`，刷完开机就是 Debian/Armbian。
 
 ## 当前状态
 
-**变体 C 已在实机验证**（2026-09-01）。刷入后正常进系统：
+**变体 C 已在实机验证。** 交付的那一份是 `build-49.1`，`burn.img` sha256
+`2303d1c58b0061e9a70d6159e27e546c382d06cf792f3680d69f3659b8f02822`。刷完直接进系统，
+不走首次开机向导，六项预置全部实机确认（2026-09-03）：
 
 ```
 Armbian OS 26.11.0 trixie / Debian GNU/Linux 13
 Linux 5.10.268-ophub aarch64        BOARD="B860av1-T"
-wlan0  RTL8189FTV (8189fs)          已连 AP，可上网
-eth0   100Mbps/Full                 DHCP 正常，收发无错误
-HDMI   card0-HDMI-A-1 connected
-根分区 /dev/mmcblk2p14 ext4 5.1G
+登录     root / password            SSH 直接进，不问 shell / 用户名 / 时区
+shell    /usr/bin/zsh 5.9 + oh-my-zsh
+根分区   /dev/mmcblk2p14 ext4 5.1G  首次开机 resize2fs 自己撑满（2.9G → 5.1G）
+swap     /dev/zram0 400.3M
+开机     24.3 s 进系统              已禁用 NetworkManager-wait-online
+wlan0    RTL8189FTV (8189fs)        已连 AP，可上网
+eth0     100Mbps/Full               DHCP 正常，收发无错误
+HDMI     card0-HDMI-A-1 connected
+eMMC     DDR52 82 MB/s              hdparm -t，HS200 打不通见 known-issues 第 1 条
 ```
+
+上游输入已冻结在这一份验证过的组合上，见 [`frozen-inputs.md`](frozen-inputs.md)；
+每周构建只在 pin 或配方变化时才出新包。预置本身由
+[`scripts/apply-rootfs-defaults.sh`](../scripts/apply-rootfs-defaults.sh) 写进镜像，
+`build-44.1` … `build-48.1` 的差异和踩坑见 [`known-issues.md`](known-issues.md) 第 7 条。
 
 变体 A、B 已被实机证伪，原因见下面「三次全黑的根因」。
 
@@ -196,6 +208,11 @@ scripts/validate-vendor-boot-burn.sh out/burn.img out/vendor-boot-contract.json
 每周的 [`weekly-burn-build.yml`](../.github/workflows/weekly-burn-build.yml) 跑的就是
 这三步，发布 `burn.img` / `burn.img.xz` / `vendor-boot-contract.json` /
 `burn-dtb-contract.json`。变体 A/B 的脚本不在发布路径里，有测试断言守着。
+输入是钉死的：`detect` 只核对 `SOURCE_RELEASE` / `SOURCE_ASSET` / `SOURCE_DIGEST`，
+上游换了东西就红，不会自己跟到新的 raw release（[`frozen-inputs.md`](frozen-inputs.md)）。
+`build-burn-payloads.sh` 里还会在 rootfs 上跑
+[`apply-rootfs-defaults.sh`](../scripts/apply-rootfs-defaults.sh) 做预置，并在 `dd` 之后用
+`debugfs` 复查 drop-in 真的在要写进 eMMC 的那份 ext4 里。
 
 构建过程中强制断言的不变量：
 

@@ -15,7 +15,13 @@ permissions:
   contents: read
 
 env:
+  # 直刷包的输入冻结在实机验证过的那一份 raw release，不再自己漂到「最新的 armbian-*」。
+  # 改下面三个值就是解冻；它们进 recipe_digest，所以改完下一次运行必然重建。
+  # 冻结集合、证据和解冻步骤见 docs/frozen-inputs.md。
   SOURCE_REPOSITORY: wuhao1477/b860av1-t-armbian-builder
+  SOURCE_RELEASE: armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1
+  SOURCE_ASSET: Armbian_26.11.0_amlogic_b860av1-t_trixie_5.10.268_server_2026.08.31.img.gz
+  SOURCE_DIGEST: 32f5b8079e6c5ff8642e0703cfc0a8ae4402b1057b46bb3b8ce7181283da6ace
 
 concurrency:
   group: b860-burn-weekly
@@ -39,14 +45,23 @@ jobs:
           FORCE: ${{ inputs.force || false }}
         run: |
           set -Eeuo pipefail
-          current=$(gh api "repos/$SOURCE_REPOSITORY/releases" --paginate --jq '[.[] | select(.draft == false and (.tag_name | startswith("armbian-")) and (.assets | length > 0))] | sort_by(.published_at) | reverse | .[0]')
-          release_tag=$(jq -r '.tag_name' <<<"$current")
-          asset=$(jq -c '[.assets[] | select(.name | test("^Armbian_.*\\.img\\.gz$"))] | .[0]' <<<"$current")
-          [[ "$asset" != null ]] || { echo 'latest public B860 release has no raw image' >&2; exit 1; }
+          release_tag=$SOURCE_RELEASE
+          current=$(gh api "repos/$SOURCE_REPOSITORY/releases/tags/$release_tag")
+          jq -e '.draft == false' <<<"$current" >/dev/null \
+            || { echo "frozen source release is a draft: $release_tag" >&2; exit 1; }
+          asset=$(jq -c --arg name "$SOURCE_ASSET" '[.assets[] | select(.name == $name)] | first // empty' <<<"$current")
+          [[ -n "$asset" ]] || {
+            echo "frozen source asset is missing from $release_tag: $SOURCE_ASSET" >&2
+            echo 'see docs/frozen-inputs.md before repinning' >&2
+            exit 1
+          }
           asset_name=$(jq -r '.name' <<<"$asset")
           asset_url=$(jq -r '.browser_download_url' <<<"$asset")
-          asset_digest=$(jq -r '.digest' <<<"$asset" | sed 's/^sha256://')
-          [[ "$asset_digest" =~ ^[0-9a-f]{64}$ ]] || { echo 'public asset has no sha256 digest' >&2; exit 1; }
+          asset_digest=$(jq -r '.digest // ""' <<<"$asset" | sed 's/^sha256://')
+          [[ "$asset_digest" == "$SOURCE_DIGEST" ]] || {
+            echo "frozen source asset digest changed: expected $SOURCE_DIGEST, got $asset_digest" >&2
+            exit 1
+          }
           recipe_digest=$(sha256sum \
             .github/workflows/weekly-burn-build.yml \
             board-inputs/DDR.USB board-inputs/UBOOT.USB board-inputs/aml_sdc_burn.UBOOT \
@@ -132,8 +147,9 @@ jobs:
           set -Eeuo pipefail
           # 这是每周自动构建的 prerelease：策略与实机验证过的那份完全相同，但字节流本身
           # 没上过机。落到这一页的人应该知道还有一份逐字节验证过的包可以下。
-          printf 'Input fingerprint: %s\nPublic release: %s\nStrategy: vendor-fip-vendor-bl33-android-boot\nStatus: format-valid / strategy hardware-verified 2026-09-01\n\n这是每周自动构建的 prerelease —— 构建策略与实机验证过的那份一致，但**这一份字节流本身没有上机测试过**。\n想要逐字节验证过的包，请下 [latest release](https://github.com/%s/releases/latest)。\n\nBurning Tool 里必须勾「擦除 flash」和「擦除 bootloader」；刷机步骤与设计说明见 [docs/burn-image.md](https://github.com/%s/blob/main/docs/burn-image.md)。\n' \
-            "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY" > out/RELEASE.md
+          printf 'Input fingerprint: %s\nPublic release: %s\nStrategy: vendor-fip-vendor-bl33-android-boot\nStatus: format-valid / strategy hardware-verified 2026-09-03\n\n这是每周自动构建的 prerelease —— 构建策略与实机验证过的那份一致，但**这一份字节流本身没有上机测试过**。\n想要逐字节验证过的包，请下 [latest release](https://github.com/%s/releases/latest)。\n\n上游输入已冻结在 `%s`，解冻步骤见 [docs/frozen-inputs.md](https://github.com/%s/blob/main/docs/frozen-inputs.md)。\nBurning Tool 里必须勾「擦除 flash」和「擦除 bootloader」；刷机步骤与设计说明见 [docs/burn-image.md](https://github.com/%s/blob/main/docs/burn-image.md)。\n' \
+            "$INPUT_FINGERPRINT" "$PUBLIC_RELEASE" "$GITHUB_REPOSITORY" "$SOURCE_RELEASE" \
+            "$GITHUB_REPOSITORY" "$GITHUB_REPOSITORY" > out/RELEASE.md
           (cd out && sha256sum burn.img burn.img.xz vendor-boot-contract.json burn-dtb-contract.json RELEASE.md > SHA256SUMS && sha256sum --check SHA256SUMS)
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:

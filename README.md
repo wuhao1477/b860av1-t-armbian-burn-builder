@@ -8,16 +8,19 @@
 
 ## 当前状态
 
-仓库有两条产出线，状态不同：
+**已冻结在 v1.0.0。** 上游输入（raw release、资产摘要、内核版本）全部钉死在实机验证过
+的那一组，构建不再自己跟到新版本 —— 上游换了东西 CI 会红，而不是悄悄出一个没上过机的
+包。冻结集合和重钉步骤见 [`docs/frozen-inputs.md`](docs/frozen-inputs.md)。
 
 | 产物 | 状态 | 说明 |
 |---|---|---|
-| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-02 实机刷入、进系统、eMMC 跑在 DDR52 82 MB/s，见 [`docs/burn-image.md`](docs/burn-image.md) |
+| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-03 实机刷入、进系统、六项预置全过、eMMC DDR52 82 MB/s，见 [`docs/burn-image.md`](docs/burn-image.md) |
 | Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
 
-直接下载：[**`build-49.1` 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/tag/b860-burn-armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-46.1-build-49.1)（`burn.img` sha256 `2303d1c5…`，六项预置全部实机验证通过：`root` / `password` 直接 SSH、zsh、根分区 5.1G、zram 400 MB、无首登向导、不等网络）。
-GitHub 上那个 `latest` 标签仍指向 `build-44.1` —— 那个包没有预置，要走首登向导，别按
-`latest` 下。刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
+直接下载：[**latest release 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)
+（`burn.img` sha256 `2303d1c5…`，即下面表里的 `build-49.1`，六项预置全部实机验证通过：
+`root` / `password` 直接 SSH、zsh、根分区 5.1G、zram 400 MB、无首登向导、不等网络）。
+刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
 **刷完直接能用，没有首次开机向导。** 镜像里由
 [`scripts/apply-rootfs-defaults.sh`](scripts/apply-rootfs-defaults.sh) 预置好：
@@ -31,17 +34,18 @@ GitHub 上那个 `latest` 标签仍指向 `build-44.1` —— 那个包没有预
 | swap | zram 400 MB（`armbian-zram-config`，`build-48.1` 起才真的起来） |
 | 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统 |
 
-**预置要 `build-49.1` 才完整。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
-序号（中间那个 `build-46.1` 是上游 raw release，别混）：
+**别按 tag 名去挑历史 prerelease。** Release tag 结尾的 `build-<运行号>` 是本仓库的构建
+序号（中间那个 `build-46.1` 是上游 raw release，别混）。仓库里还留着几个预置不完整的
+prerelease，下面这张表说明哪些不能刷 —— 下 `latest` 就不用管它：
 
 | 运行 | 预置 | 刷完能不能进系统 |
 |---|---|---|
-| `build-44.1`（GitHub 的 `latest`） | 无 | 能，走首登向导现场设口令 |
+| `build-44.1` | 无 | 能，走首登向导现场设口令 |
 | `build-45.1` | 有，但首登标记没真删掉 | 能，同上 |
 | `build-46.1` | 有，标记删了却**没钉口令** | **不能** —— root 口令是上游出厂哈希，明文未知 |
-| `build-47.1` | **除 swap 全部实机验证通过** | 能，`root` / `password`；只是没有 swap |
+| `build-47.1` | 除 swap 全部实机验证通过 | 能，`root` / `password`；只是没有 swap |
 | `build-48.1` | 差根分区没撑满（2.9G）；其余 5 项实机验证通过 | 能 |
-| **`build-49.1`（用这个）** | 完整，六项全部实机验证通过 | 能 |
+| **`build-49.1`（= latest release）** | 完整，六项全部实机验证通过 | 能 |
 
 `build-47.1` 的完整实机结果、以及 swap 为什么没起来（构建时写进 rootfs 的 `*.wants`
 符号链接一条都没进镜像，同一毫秒写的常规文件全在），见
@@ -62,19 +66,22 @@ wlan0  RTL8189FTV (8189fs) 2.4G 20 Mbps   eth0 100Mbps/Full DHCP 正常
 HDMI   card0-HDMI-A-1 connected     eMMC DDR52 82 MB/s (/dev/mmcblk2p14 ext4)
 ```
 
-尚未解决的问题（`/boot` 为空、蓝牙初始化超时等）列在 [`docs/known-issues.md`](docs/known-issues.md)。
+尚未解决的问题（`/boot` 为空、蓝牙初始化超时、5.10 内核线 2026-12-31 EOL 等）列在 [`docs/known-issues.md`](docs/known-issues.md)。
 
 ## 从哪读起
 
 | 文件 | 内容 |
 |---|---|
 | [`docs/burn-image.md`](docs/burn-image.md) | **直刷包的设计、三次实机全黑的根因、刷机步骤** |
+| [`docs/frozen-inputs.md`](docs/frozen-inputs.md) | **冻结了哪些输入、怎么重钉、内核线为什么停在 5.10** |
 | [`docs/known-issues.md`](docs/known-issues.md) | 待解决问题，每条带证据和修它要动什么 |
 | [`docs/device-validation.md`](docs/device-validation.md) | raw 镜像那条线的实机证据采集流程 |
 | [`docs/history/`](docs/history/) | 早期设计文档，已被取代，只作溯源 |
-| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 本地怎么跑、提 PR 的要求 |
+| [`CONTRIBUTING.md`](CONTRIBUTING.md) | 本地怎么跑、提 PR 的要求、迭代入口 |
 
 ```
+scripts/build-burn-payloads.sh         从 raw 镜像做 boot/data 载荷 + rootfs 预置
+scripts/apply-rootfs-defaults.sh       开箱即用项（口令、shell、zram、resize2fs）
 scripts/build-vendor-boot-burn.sh      变体 C 构建器（唯一实机验证过的）
 scripts/validate-vendor-boot-burn.sh   独立复核交付件
 scripts/setup-image-tools.sh           按 config 钉死的 commit 编 ampack / gxlimg
@@ -105,9 +112,24 @@ gh workflow run verify-device.yml \
 
 通过后只为该 Release 增加 `operator-attested / one-device` 资产；原始 `validation-report.json` 继续保持 `container-valid / hardware-unverified`。这是单台设备的操作者证据，不是远程密码学硬件证明，也不代表所有硬件批次已经适配。
 
-公开构建同时发布 Armbian raw `.img.gz` 和 USB Burning Tool 的 `burn.img.xz`；直刷包随附 `vendor-boot-contract.json`（Android boot 头部、cmdline、root UUID）和 `burn-dtb-contract.json`（`meson1.dtb` 的 7 个 sub-DTB 槽位与替换结果），再加一份 `SHA256SUMS`。CI 里的自动校验只能证明容器结构和设备树自洽；变体 C 的可启动结论来自机主实机刷入，不是构建成功推出来的。设备证据流程仍只针对 raw 镜像。
+本仓库公开发布的是 USB Burning Tool 的 `burn.img.xz`（raw `.img.gz` 由上游那个仓库发）；直刷包随附 `vendor-boot-contract.json`（Android boot 头部、cmdline、root UUID）和 `burn-dtb-contract.json`（`meson1.dtb` 的 7 个 sub-DTB 槽位与替换结果），再加一份 `SHA256SUMS`。CI 里的自动校验只能证明容器结构和设备树自洽；变体 C 的可启动结论来自机主实机刷入，不是构建成功推出来的。设备证据流程仍只针对 raw 镜像。
 
 ## 自动构建
+
+两个仓库，别混：
+
+| 仓库 | 产出 | workflow |
+|---|---|---|
+| [`b860av1-t-armbian-builder`](https://github.com/wuhao1477/b860av1-t-armbian-builder) | raw `armbian-*` release（本仓库的输入） | 那边的 `weekly-build.yml` |
+| 本仓库 | `b860-burn-*` 直刷包 | [`weekly-burn-build.yml`](.github/workflows/weekly-burn-build.yml) |
+
+本仓库也带一份休眠的 raw 构建线（`weekly-build.yml`、[`config/sources.json`](config/sources.json)、
+`scripts/build-raw-image.sh`），当前不发 raw 包，留着是为了两条线的输入口径一致。
+
+**直刷包的输入是冻结的。** `weekly-burn-build.yml` 顶部钉死 `SOURCE_RELEASE` /
+`SOURCE_ASSET` / `SOURCE_DIGEST`，`detect` 只核对不选新；`config/sources.json` 把内核钉在
+`5.10.268` 并校验摘要。上游改了东西 CI 会红，不会自己出新包 ——
+重钉步骤见 [`docs/frozen-inputs.md`](docs/frozen-inputs.md)。
 
 下面出现两个独立编号的 schema，不要混淆：
 
@@ -118,6 +140,8 @@ gh workflow run verify-device.yml \
 
 门禁规则：来源清单 schema ≥ 5 时，验证报告 schema 必须正好等于 8。
 
+以下描述 raw 那条线（`weekly-build.yml`）的检测与发布规则：
+
 - 每周一 UTC 03:23 检查一次，相邻计划时间为 7 天。
 - 检测 job 从固定的 Debian 官方 HTTPS 地址下载 `stable/InRelease`，使用 Ubuntu 提供的 `debian-archive-keyring` 验签，并校验 Debian 标签、`arm64` 架构和 `main` 组件后才解析版本。
 - Debian stable 代号与 `arm64` 架构用于匹配基础镜像；完整 point version 用于版本追踪、构建指纹和 Release 标签。
@@ -125,8 +149,8 @@ gh workflow run verify-device.yml \
 - 下载、签名、元数据或匹配镜像任一检查失败时立即停止，不进入镜像构建。
 - 每次检测先审计全部公开的非草稿 `armbian-*` Release；每一份都必须是**来源清单 schema 5 + 验证报告 schema 8** 的 prerelease、源码构建 U-Boot/DTB、通过 QEMU 系统启动烟测、无 Android 扫描结果的 B860 Armbian 镜像。任一历史或不完整 Release 存在时，检测直接失败，不会继续构建。
 - **验证报告 schema 7** 的旧公开 Release 不再满足当前发布门禁；升级后必须先删除旧 Release 和同名 tag，再运行首次产出 schema 8 验证报告的构建。
-- 检查范围包括所有匹配 Debian stable 的公开 Armbian Release，并按 Armbian 与基础镜像内核版本全局选择最高资产；同时跟踪最新 `5.10.y` 内核、ophub 构建器提交、upstream U-Boot 源码提交和本仓库构建配方哈希。
-- 检测拒绝 Armbian、目标内核或 Debian stable 版本回退，即使手动设置 `force=true` 也不能绕过。
+- 检查范围包括所有匹配 Debian stable 的公开 Armbian Release，并按 Armbian 与基础镜像内核版本全局选择最高资产；**内核不在此列 —— 它钉死在 `5.10.268` 并逐字节校验摘要**，跟踪的其余输入是 ophub 构建器提交、upstream U-Boot 源码提交和本仓库构建配方哈希。
+- 检测拒绝 Armbian 或 Debian stable 版本回退，即使手动设置 `force=true` 也不能绕过；目标内核既不升也不降，换它必须显式改 `config/sources.json`。
 - 构建配方还固定 upstream U-Boot v2020.07 的 commit、Armbian GPL 补丁 SHA-256、`libretech-cc_defconfig` 和 `aarch64-linux-gnu-` 交叉编译设置；不会把第三方预编译 U-Boot 作为最终 overload。
 - 只有统一指纹变化时才进入镜像构建；没有变化时只运行轻量检测 job。
 - 构建失败不会记录为成功，下周会再次尝试同一组输入。
@@ -134,7 +158,10 @@ gh workflow run verify-device.yml \
 - Tag 格式为 `armbian-<版本>-debian-<Debian完整版本>-<代号>-k<内核>-build-<运行号>.<重试号>`；同一版本可以重复构建且不会覆盖历史记录。
 - 每约 42 天只更新一次 `.github/schedule-heartbeat`，避免 GitHub 因 60 天无仓库活动而停用 schedule；该文件不进入构建指纹，单独变更时也不会触发 CI 编译或镜像构建。
 
-手动启动：打开 [Weekly build](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/weekly-build.yml)，选择 **Run workflow**，把 `force` 设为 `true`。
+手动启动直刷包构建：打开 [Weekly burn image](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/actions/workflows/weekly-burn-build.yml)，
+选择 **Run workflow**，把 `force` 设为 `true`。必须在默认分支上跑 —— `detect` 带
+`if: github.ref_name == default_branch`，feature 分支只会跑诊断 job，产不出包。
+raw 那条线在[另一个仓库](https://github.com/wuhao1477/b860av1-t-armbian-builder/actions/workflows/weekly-build.yml)。
 
 ## burn.img 直刷包
 

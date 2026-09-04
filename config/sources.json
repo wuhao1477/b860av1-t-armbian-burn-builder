@@ -6,7 +6,9 @@
   "kernel": {
     "repository": "ophub/kernel",
     "releaseTag": "kernel_stable",
-    "assetPattern": "^5\\.10\\.[0-9]+\\.tar\\.gz$"
+    "version": "5.10.268",
+    "assetPattern": "^5\\.10\\.268\\.tar\\.gz$",
+    "digest": "d3559323a4812600ab8f2bd0156d2b863c9b1ea3627d59d64890b8498621e49f"
   },
   "builder": {
     "repository": "ophub/amlogic-s9xxx-armbian",

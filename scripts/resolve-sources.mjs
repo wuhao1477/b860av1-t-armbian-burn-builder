@@ -217,6 +217,27 @@ async function readPrevious(path) {
   }
 }
 
+// 内核冻结在实机验证过的那一版。assetPattern 是完整文件名，selectLatestAsset 不带
+// versionExtractor 时只接受恰好一个匹配，所以 kernel_stable 里新出的 5.10.y 不会自己漂
+// 进来 —— 换内核必须显式改 config/sources.json（解冻步骤见 docs/frozen-inputs.md）。
+function selectPinnedKernel(assets) {
+  const { version, digest, assetPattern, repository, releaseTag } = sourceConfig.kernel;
+  let kernel;
+  try {
+    kernel = selectLatestAsset(assets, assetPattern);
+  } catch (error) {
+    throw new Error(`frozen kernel ${version} is no longer published in ${repository}@${releaseTag}`
+      + ` (${error.message}); see docs/frozen-inputs.md`);
+  }
+  if (kernel.name !== `${version}.tar.gz`) {
+    throw new Error(`frozen kernel asset must be ${version}.tar.gz, got ${kernel.name}`);
+  }
+  if (kernel.digest !== digest) {
+    throw new Error(`frozen kernel ${version} digest changed: expected ${digest}, got ${kernel.digest}`);
+  }
+  return kernel;
+}
+
 async function resolveManifest(debian) {
   const patterns = basePatterns(debian.codename);
   const baseReleases = await fetchPages(
@@ -239,13 +260,8 @@ async function resolveManifest(debian) {
   if (!armbianVersion) throw new Error(`cannot parse Armbian version from ${base.name}`);
 
   const kernelRelease = await fetchJson(apiUrl(`/repos/${sourceConfig.kernel.repository}/releases/tags/${encodeURIComponent(sourceConfig.kernel.releaseTag)}`));
-  const kernel = selectLatestAsset(
-    await fetchReleaseAssets(kernelRelease),
-    sourceConfig.kernel.assetPattern,
-    (name) => name.match(/^(5\.10\.[0-9]+)\.tar\.gz$/)?.[1],
-  );
-  const kernelVersion = kernel.name.match(/^(5\.10\.[0-9]+)\.tar\.gz$/)?.[1];
-  if (!kernelVersion) throw new Error(`cannot parse kernel version from ${kernel.name}`);
+  const kernel = selectPinnedKernel(await fetchReleaseAssets(kernelRelease));
+  const kernelVersion = sourceConfig.kernel.version;
   const builder = await resolveCommit(sourceConfig.builder);
   const ubootSource = await resolveCommit(sourceConfig.ubootSource);
 

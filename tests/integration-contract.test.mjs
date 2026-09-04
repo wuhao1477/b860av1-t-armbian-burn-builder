@@ -220,6 +220,43 @@ test('burn builder creates a mainline BL33 extlinux eMMC package', () => {
   }
 });
 
+test('frozen upstream inputs stay self-consistent across config, workflow and docs', () => {
+  const sources = JSON.parse(read('config/sources.json'));
+  const resolver = read('scripts/resolve-sources.mjs');
+  const workflow = read('.github/workflows/weekly-burn-build.yml');
+  const frozen = read('docs/frozen-inputs.md');
+  const literal = (value) => value.replaceAll(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pin = (name) => workflow.match(new RegExp(`^  ${name}: (\\S+)$`, 'm'))?.[1];
+
+  // 内核 pin 必须三处自洽：assetPattern 是 version 的完整文件名形式，摘要是 64 位十六进制。
+  // 只改其中一个 = 构建要么永远红、要么悄悄放过别的版本。
+  assert.equal(sources.kernel.assetPattern, `^${literal(sources.kernel.version)}\\.tar\\.gz$`);
+  assert.match(sources.kernel.digest, /^[0-9a-f]{64}$/);
+  assert.match(resolver, /frozen kernel \$\{version\} digest changed/);
+  assert.match(resolver, /kernel\.name !== `\$\{version\}\.tar\.gz`/);
+  assert.doesNotMatch(resolver, /5\\\.10\\\.\[0-9\]\+|\(5\\\.10\\\./,
+    '内核选择器不能退回浮动的 5.10.x');
+
+  // 直刷包真正的 pin 在 burn workflow 上：raw release tag + 资产名 + 摘要。
+  const release = pin('SOURCE_RELEASE');
+  const asset = pin('SOURCE_ASSET');
+  const digest = pin('SOURCE_DIGEST');
+  assert.ok(release && asset && digest, 'burn workflow must pin release, asset and digest');
+  assert.match(digest, /^[0-9a-f]{64}$/);
+  // raw release tag 和资产名里的内核版本必须与 config 的 pin 是同一个。
+  assert.ok(release.includes(`k${sources.kernel.version}-`), `${release} 与内核 pin 不一致`);
+  assert.ok(asset.includes(`_${sources.kernel.version}_`), `${asset} 与内核 pin 不一致`);
+  // 退回「挑最新的 armbian-*」就等于解冻，而且不会有任何人注意到。
+  assert.doesNotMatch(workflow, /sort_by\(\.published_at\)/);
+  assert.match(workflow, /releases\/tags\/\$release_tag/);
+  assert.match(workflow, /frozen source asset digest changed/);
+
+  // 文档闭环：重钉时必须同步 docs/frozen-inputs.md，否则读文档的人会照着旧值去核对。
+  for (const value of [release, asset, digest, sources.kernel.version, sources.kernel.digest]) {
+    assert.match(frozen, new RegExp(literal(value)), `docs/frozen-inputs.md 缺少 ${value}`);
+  }
+});
+
 test('README schema table matches the authoritative schema versions', () => {
   const readme = read('README.md');
   const sources = JSON.parse(read('config/sources.json'));

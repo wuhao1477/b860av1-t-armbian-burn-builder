@@ -333,7 +333,7 @@ test('manual device verification validates first and publishes unique assets sec
   assert.doesNotMatch(workflow, /\.img\.gz/);
 });
 
-test('burn workflow follows the public raw release and publishes the vendor-boot package', () => {
+test('burn workflow builds the vendor-boot package from the frozen raw release', () => {
   const workflow = read('.github/workflows/weekly-burn-build.yml');
   const contracts = ['vendor-boot-contract.json', 'burn-dtb-contract.json'];
 
@@ -376,6 +376,10 @@ test('burn workflow follows the public raw release and publishes the vendor-boot
     assert.match(recipeList, new RegExp(recipeInput.replaceAll('.', '\\.')));
   }
   assert.match(workflow, /SOURCE_REPOSITORY:\s*wuhao1477\/b860av1-t-armbian-builder/);
+  // 输入冻结在实机验证过的那一份 raw release，detect 只核对、不再挑最新。
+  // 自洽性（tag / 资产名 / 摘要 / 文档）由 integration-contract 那条测试守着。
+  assert.match(workflow, /SOURCE_RELEASE:\s*armbian-/);
+  assert.match(workflow, /gh api "repos\/\$SOURCE_REPOSITORY\/releases\/tags\/\$release_tag"/);
   assert.match(workflow, /gh release download "\$PUBLIC_RELEASE" --repo "\$SOURCE_REPOSITORY"/);
   assert.match(workflow, /gh release create[^\n]+--draft/);
   assert.match(workflow, /draft_release_ready\(\)[\s\S]+release_ready=false[\s\S]+for attempt in 1 2 3 4 5[\s\S]+release_ready=true/);

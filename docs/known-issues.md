@@ -3,8 +3,8 @@
 实机（Armbian 26.11.0 / 5.10.268-ophub）已经能正常使用，下面是还没解决的。
 每条都带实测证据和修它需要动什么，方便接手的人直接开工。
 
-**还开着的：2、3、4、8，加第 7 条里的根分区（修好了但还没实机跑过）。**
-第 1、5、6 条已修复或已排除，保留下来是因为踩坑本身有价值。
+**还开着的：2、3、4、8、9。**
+第 1、5、6、7 条已修复或已排除，保留下来是因为踩坑本身有价值。
 
 ## 1. eMMC 停在 25 MHz legacy 模式
 
@@ -355,3 +355,20 @@ journald 起来之前，所以日志里看不到）。
 **结论没变，而且现在有两次实机证据支持**：开机自启只能靠 `<target>.d/` 里的 drop-in
 常规文件。两条 drop-in（`sysinit.target.d` 的 zram、`multi-user.target.d` 的
 expand-rootfs）在 `build-49.1` 上都按预期起来了。
+
+## 9. 内核线 2026-12-31 EOL，且没有保住 WiFi 的升级路线
+
+**已知、无解，只能等移植。** 当前钉死在 5.10.268（[`frozen-inputs.md`](frozen-inputs.md)）。
+
+这块板唯一的无线是 SDIO 的 RTL8189FTV，驱动 `rtl8189fs` 是 out-of-tree 的，主线没有。
+ophub 的 `kernel-config/release/stable/config-*` 里 `CONFIG_RTL8189FS=m` 只出现在
+5.10 和 5.15；6.1 / 6.6 完全没有，6.12 / 6.18 只有 `CONFIG_RTL8188EE=m`（PCIe 的另一颗
+芯片，不是这块板上的）。而 5.10 和 5.15 的 EOL 都是 **2026-12-31**。
+
+所以：**升级到任何 6.x = 丢掉 WiFi；留在有 WiFi 的两条线 = 年底之后没有上游补丁。**
+
+**修它需要**：把 `rtl8189fs` 移植到 6.12（或 6.18）并让 ophub 的 config 带上，这是唯一
+能长期活下去的路。三条路线的对比在 [`frozen-inputs.md`](frozen-inputs.md)。
+
+在那之前：用户态照常 `apt full-upgrade` 就能跟上（rootfs 里没有 `linux-image-*`，
+`apt` 碰不到启动路径，见第 2 条），只是换不了内核。

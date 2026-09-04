@@ -8,6 +8,18 @@
 **最重要的一条：变体 A/B 那条路（重打包 FIP、换掉 BL33）已经被实机证伪。**
 `build-burn-image.sh` 和 `build-ophub-bl33-burn.sh` 留在仓库里只作证据，不要基于它们做新功能。
 
+## 要跟新的上游版本？从这里开始
+
+上游输入是**冻结**的：raw release、资产摘要、内核版本全部钉死在实机验证过的那一组，
+构建不会自己跟到新版本。重钉的完整步骤、内核线的取舍证据和三条升级路线都在
+[`docs/frozen-inputs.md`](docs/frozen-inputs.md)。
+
+两个要点，省得白跑一次 CI：
+
+- 改 pin 必须同时改 `docs/frozen-inputs.md`，`tests/integration-contract.test.mjs` 有断言守着。
+- `weekly-burn-build.yml` 的 `detect` 带 `if: github.ref_name == default_branch`，
+  在 feature 分支上 dispatch 只会跑诊断 job，产不出包。
+
 ## 本地跑起来
 
 ```bash

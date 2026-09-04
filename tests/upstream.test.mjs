@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { canonicalStringify } from '../src/canonical-json.mjs';
+import sourceConfig from '../config/sources.json' with { type: 'json' };
 import * as resolver from '../scripts/resolve-sources.mjs';
 import { main as resolveSources } from '../scripts/resolve-sources.mjs';
 import {
@@ -267,7 +268,13 @@ test('resolver reads releases and release assets from every API page', async () 
   const baseAsset = asset('Armbian_27.09.0-trunk_forky_arm64_6.12.99.img.gz', 'e');
   const olderBaseAsset = asset('Armbian_27.08.0-trunk_forky_arm64_6.18.38.img.gz', 'c');
   const rootfsAsset = asset('Armbian_27.08.0-forky_arm64_6.18.38_rootfs.tar.gz', 'd');
-  const kernelAsset = asset('5.10.260.tar.gz', 'f');
+  // 内核已冻结，resolver 逐字节比对名字和摘要，所以 fixture 直接取 config 里的 pin ——
+  // 写死一个假摘要会让这个测试在每次重钉时无声地跟着改。
+  const kernelAsset = {
+    ...asset(`${sourceConfig.kernel.version}.tar.gz`, 'f'),
+    digest: `sha256:${sourceConfig.kernel.digest}`,
+  };
+  let kernelAssets = [kernelAsset];
   const releasePageOne = Array.from({ length: 100 }, (_, index) => ({
     tag_name: `Armbian_bookworm_arm64_server_${index}`,
     published_at: '2026-07-02T00:00:00Z',
@@ -290,7 +297,7 @@ test('resolver reads releases and release assets from every API page', async () 
         assets_url: `http://${request.headers.host}/kernel-assets`,
       };
     } else if (url.pathname === '/kernel-assets') {
-      body = [kernelAsset];
+      body = kernelAssets;
     } else if (url.pathname === '/repos/ophub/amlogic-s9xxx-armbian/commits/main') {
       body = { sha: '1'.repeat(40), html_url: 'https://example.test/commit' };
     } else if (url.pathname === '/repos/u-boot/u-boot/commits/v2020.07') {
@@ -337,6 +344,19 @@ test('resolver reads releases and release assets from every API page', async () 
     assert.match(result.manifest.recipe.files['src/uboot-script-payload.mjs'], /^[0-9a-f]{64}$/);
     assert.match(result.manifest.recipe.files['.github/workflows/weekly-build.yml'], /^[0-9a-f]{64}$/);
     assert.equal(written.fingerprint, result.manifest.fingerprint);
+
+    // 冻结的意义是「上游换了就让构建红」，不是「悄悄跟着上游走」。
+    const pinned = sourceConfig.kernel.version.replaceAll('.', '\\.');
+    kernelAssets = [{ ...kernelAsset, digest: digest('a') }];
+    await assert.rejects(
+      resolveSources(['--output', output, '--debian-stable', debianStable]),
+      new RegExp(`frozen kernel ${pinned} digest changed`),
+    );
+    kernelAssets = [asset('5.10.999.tar.gz', 'f')];
+    await assert.rejects(
+      resolveSources(['--output', output, '--debian-stable', debianStable]),
+      new RegExp(`frozen kernel ${pinned} is no longer published`),
+    );
   } finally {
     if (originalApi === undefined) delete process.env.GITHUB_API_URL;
     else process.env.GITHUB_API_URL = originalApi;
