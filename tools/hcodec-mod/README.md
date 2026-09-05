@@ -7,9 +7,11 @@ M2M 编码器。对应 [`../../docs/hcodec-encoder-plan.md`](../../docs/hcodec-e
 - **1a 已实机验证（2026-09-05）**：insmod 时在内核里编出 1280x720 Baseline IDR，
   4432 / 4597 / 4499 字节（热载 / `rmmod` 后冷载 / 开机从未上电），
   `ffprobe` 认 `key_frame=1 pict_type=I`。
-- **1b 已编译通过（2026-09-05）**，等实机验证：`vermagic 5.10.268-ophub SMP
-  preempt mod_unload aarch64`、`depends v4l2-mem2mem,videobuf2-dma-contig`，
-  `W=1` 零告警。`ffmpeg -c:v h264_v4l2m2m` / `gst v4l2h264enc` 零补丁能用。
+- **1b 已实机验证（2026-09-05）**：1280x768 NV12 → H.264，IDR + 9 个 P 帧，
+  ffmpeg 解出来对着输入 49.2~54.8 dB 且不发散；单 IDR 在 QP 10/20 上无损
+  （99 dB、maxerr 0），QP 26/35/45 是 54.8/47.6/40.9 dB。同一输入连编 10 个 IDR
+  全部 54.8 dB、字节数 ±0.4%。`ffmpeg -c:v h264_v4l2m2m` / `gst v4l2h264enc`
+  零补丁能用。
 - **1b 的 V4L2 那一半在 QEMU 上全过（2026-09-05）**：`v4l2-compliance` 48/48、
   0 failed 0 warnings，`Detected Stateful Encoder`。这一趟抓出 6 个真 bug，
   其中「`v4l2_device_register` 空指针」会让板子每次 insmod 都挂 ——
@@ -78,19 +80,33 @@ ssh root@<board> '
 | `poweron` | 1 | 自己做上电序列 |
 | `nohw` | 0 | 假硬件：4 个 MMIO 窗口换成 RAM，轮询点自己应答，码流长度为 0（QEMU 上验寄存器编程用） |
 | `blanket_reset` | 0 | 用厂商的 `DOS_SW_RESET1=0xffffffff`（会打断正在解码的 vdec） |
+| `dbg` | 0 | 每帧打一行 `idr= qp= total= vb=→` 和输入 Y 校验和 |
 
 自测码流：`cat /sys/kernel/debug/meson-hcodec/out.h264 > /tmp/out.h264`。
+编码器自己的重建帧（查错用，跟解码结果对比就能分清是量化错还是 signal 错）：
+`cat /sys/kernel/debug/meson-hcodec/rec.y`，`ALIGN(w,32) × ALIGN(h,16)` 的 Y 平面。
 
 ## 试 V4L2
 
+`meson_vdec` 会先占掉 `/dev/video0`，我们通常是 `video1`，先 `v4l2-ctl --list-devices` 看。
+
 ```bash
-v4l2-ctl -d /dev/video0 --all
+v4l2-ctl -d /dev/video1 --all
 ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30 -t 5 \
        -pix_fmt nv12 -c:v h264_v4l2m2m -b:v 4M /tmp/t.h264
 ffprobe -show_frames -select_streams v /tmp/t.h264 | grep -c key_frame=1
 ```
 
-## 三个不能动的地方
+用 `v4l2-ctl` 手动推帧时有两个坑：
+
+1. **`--set-ctrl` 必须和 `--stream-mmap` 在同一次调用里。** 控件挂在 file handle
+   上，另起一次调用等于全恢复默认。控件名带 `_value` 后缀
+   （`h264_i_frame_qp_value`、`h264_minimum_qp_value` …），`v4l2-ctl -L` 能列。
+2. **分辨率要让 `sizeimage` 是 4096 的整数倍**，且 `--stream-out-mmap N` 要显式给
+   数量。`v4l2-ctl` 每帧按 mmap 缓冲区长度（vb2 `PAGE_ALIGN` 过的）读文件，
+   否则读第二帧就跨过文件尾，只喂得进一帧。1280x768 NV12 = 1474560 = 360 页，对齐。
+
+## 四个不能动的地方
 
 1. **宽高一律圆到 16 的倍数**（1080 → 1088）。ucode 按整 MB 编，厂商驱动里
    也没有 SPS `frame_cropping`（`crop_*` 只喂 ge2d 缩放器），所以没法只裁显示区。
@@ -101,6 +117,12 @@ ffprobe -show_frames -select_streams v /tmp/t.h264 | grep -c key_frame=1
 3. **QP 走量化表，不走 `avc_prot_init()` 的 `quant` 参数。** GXBB+ 的 FULL
    ucode 会用 `quant_tbl_i4/i16[id][0] & 0xff` 反算 `i_pic_qp`（vendor.inc:1509），
    所以换 QP = 重填三张表（`hc_set_qp()`）。
+4. **`HCODEC_QDCT_VLC_QUANT_CTL_1 = 0`，而且 QP 只能在 IDR 换。** ucode 把
+   `slice_qp_delta` 恒写 0（PPS 的 `pic_init_qp` 就是整个 GOP 的 slice QP），又把
+   自己不用的 per-MB `mb_qp_delta` 写进码流。厂商那个 ±26/25 的幅度留着的话，
+   同一输入的 10 个 IDR 解出来 7~26 dB 且每次不同；夹成 0 之后全部 51.8 dB。
+   连带一条：`ENCODER_NON_IDR` 之后 ucode 报的是 `IDR_DONE(9)`，两个 DONE 得互认。
+   代价是码率控制只能在 IDR 边界生效，`h264_p_frame_qp_value` 表达不出来。
 
 `PHYSICAL_BUFF` 而不是 `LOCAL_BUFF`：后者会把 `request->src` 强行改成
 `dct_buff_start_addr`（vendor.inc:1194），V4L2 递进来的缓冲区就成了摆设。

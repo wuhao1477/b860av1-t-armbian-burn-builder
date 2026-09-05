@@ -149,12 +149,11 @@
 
 ### 还差什么
 
-用户态原型和树外内核模块都跑通了（阶段 0 / 1a，实机编出可解码的 IDR），
-V4L2 M2M 那层（阶段 1b）已经对着 5.10.268-ophub 头文件树编译通过（`W=1` 零告警），
-并在 QEMU 上跑过 `v4l2-compliance` 48/48（0 failed，抓出 6 个真 bug）；`nohw=1` 把四个
-MMIO 窗口换成 RAM 之后，IDR/P/P 三帧的**寄存器编程**也在 QEMU 上逐字段断言过了
-（`frame_num` 0/1/2、POC 0/2/4、dblk↔ref canvas 互换、QP 表按帧重填）。
-**还差的是真码流**：QEMU 里没有 AMRISC，帧长度恒为 0，所以多帧 / P 帧的**码流**
-仍是零实机验证 —— 等板子回来跑 `h264_v4l2m2m` 端到端。
+阶段 0 / 1a / 1b 都跑通了：H.264 编码现在是一个能用的 V4L2 stateful 编码器
+（`v4l2-compliance` 48/48，实机 IDR + 9 个 P 帧解出来 49~55 dB，QP 10/20 无损）。
+路上的两个 bug 都在 QP 上，而且都只有实机能抓：ucode 把 `slice_qp_delta` 恒写 0
+（QP 只能在 IDR 换），又把没人用的 `mb_qp_delta` 写进码流（必须
+`HCODEC_QDCT_VLC_QUANT_CTL_1 = 0` 夹掉）—— 细节见
+[`docs/hcodec-encoder-plan.md`](hcodec-encoder-plan.md)。
+剩下的都是可选项：hcodec 中断（GXL SPI 45，现在轮询，30 fps 下无所谓）和上游化。
 mainline 5.10 依旧一行 Amlogic 编码代码都没有（`meson-vdec` 只解码）。
-实施规划和实机结果见 [`docs/hcodec-encoder-plan.md`](hcodec-encoder-plan.md)。

@@ -2,8 +2,8 @@
 
 **结论先行：分三阶段。阶段 0 用户态原型（**已完成，实机编出可解码的 IDR 帧**）→
 阶段 1a 树外内核模块（**已完成，insmod 时在内核里编出 IDR**）→ 阶段 1b 包成
-V4L2 M2M（**QEMU 上 `v4l2-compliance` 48/48 全过、IDR/P/P 三帧的寄存器编程逐字段
-断言过，实机只差真码流**，ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑）→
+V4L2 M2M（**已完成，实机 I+P 多帧码流用 ffmpeg 解出来 49~99 dB**，`v4l2-compliance`
+48/48 全过，ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑）→
 阶段 2 上游化（可选，2 周+）。**
 
 硬件已经确认可用，见 [`docs/hardware-probes.md`](hardware-probes.md)。
@@ -114,11 +114,42 @@ CMA 里的旧数据，ucode 的 RD 决策会读它们。解码画面照样对得
    v1.1.0 之后一个都不在，重建花掉半小时。`mmio` 的源码现在进了仓库：
    [`tools/hcenc/mmio.c`](../tools/hcenc/mmio.c)。
 
-## 阶段 1b：包成 V4L2 M2M（QEMU 全过，等实机验证真码流）
+## 阶段 1b：包成 V4L2 M2M ✅ 已完成（2026-09-05 实机）
+
+**结果：1280x768 NV12 → H.264，IDR + 9 个 P 帧，ffmpeg 解出来对着输入
+49.2~54.8 dB；单 IDR 在 QP 10/20 上是无损（99 dB，maxerr 0），QP 26/35/45 是
+54.8/47.6/40.9 dB，单调下降。同一输入连编 10 个 IDR 全部 54.8 dB、字节数
+±0.4%** —— 确定性、可重放。
 
 阶段 1a 的核心序列已经在内核里跑通，1b 把它包成 V4L2 stateful 编码器，
 让 ffmpeg 的 `h264_v4l2m2m` 和 gstreamer 的 `v4l2h264enc` 零补丁能用
 （厂商那套 `/dev/amvenc_avc` ioctl 还得额外配 `libvpcodec`，不做）。
+
+### 实机上这一趟只有两个真 bug，都在 QP 上（2026-09-05）
+
+「重建帧完美、解码器解出来一片白」是这两个 bug 的共同症状。**这个症状能直接把
+量化器排除掉**：重建帧 = 预测 + 反量化(量化(原始 − 预测))，不管解码器算不算得出
+同一个预测都会 ≈ 原始。所以 `rec/in` 60 dB 而 `dec/rec` 4 dB，错的一定是**码流里
+signal 出去的东西**，不可能是量化。
+
+| # | 症状 | 真因 | 修法 |
+| --- | --- | --- | --- |
+| 1 | 控件要 QP 10，帧按 10 量化，解出来全白（`dec/in` 4.4 dB、maxerr 239），而重建帧 58~71 dB | **GXL 的 FULL ucode 把 `slice_qp_delta` 恒写 0**（实测 8 个码流，PPS 说多少 slice 就是多少）。`hc_headers()` 在 streamon 时跑，比 `ctx->cur_qp` 早，PPS 的 `pic_init_qp` 就永远冻在 26 | QP 只能在重发 SPS/PPS 的地方换 —— 也就是 IDR，厂商也正是每个 IDR 先 `ENCODER_SEQUENCE` 再 `ENCODER_PICTURE`。非 IDR 帧改用缓存的 `hc_hdr_qp` |
+| 2 | slice QP 26 时同一输入连编 10 个 IDR，解出来 7~26 dB 且**每次都不一样**（QP 10/45 反而干净） | ucode 把 per-MB `mb_qp_delta` **写进了码流，自己的量化器却不按它走**。`ffmpeg -debug qp` 在 slice QP 26 的帧里看到 5..50 的乱数（厂商把幅度开到 `QDCT_VLC_QUANT_CTL_1 = ±26/25`）。QP 10/45 干净只是因为同样的绝对 Δ 在那儿被夹掉了，26 在正中间受害最大 | `avc_prot_init` 之后补一条 `HCODEC_QDCT_VLC_QUANT_CTL_1 = 0`，VLC 就只能写 `mb_qp_delta = 0`。10 个 IDR 全部 51.8 dB |
+
+`ffmpeg -debug qp` 是这一趟最有用的一个工具：它直接把解码器看到的逐 MB QP 图打出来。
+
+排掉的假设（都实测过，别再走一遍）：从 CPU 清 `VLC_ADV_CONFIG` 的
+`use_q_delta_quant` / `hcmd_use_q_info` / `hcmd_intra_use_q_info`（ucode 会重写回去，
+清了**更差**）；侧缓冲区里的旧数据（六个全清零，结果不变）；每次 insmod 的残留状态
+（同一次 insmod 里 10 个 IDR 各错各的）；P 帧链传播（出错的全是全 intra 的 IDR）。
+
+**还有一个坑不在驱动里**：`v4l2-ctl --set-ctrl` 必须和 `--stream-mmap` 在**同一次
+调用**里。控件挂在 file handle 上，另起一次调用等于全部恢复默认（i=26/min=16/max=45）。
+控件名带 `_value` 后缀：`h264_i_frame_qp_value`、`h264_minimum_qp_value` …
+
+**代价**：`slice_qp_delta ≡ 0` 意味着码率控制只能在 IDR 边界生效，`h264_p_frame_qp_value`
+（I/P QP 差值）在这颗 ucode 上表达不出来 —— 收下了但不起作用。
 
 **编译验证（2026-09-05，不需要板子）**：用冻结的 `5.10.268.tar.gz` 里的
 `header-5.10.268-ophub.tar.gz` 头文件树，在 arm64 容器里原生 kbuild ——
@@ -174,7 +205,8 @@ nohw#3 idr=0 idr_pic_id=1 frame_num=2 poc=4 rec=e6e5e4 anc=e9e8e7 qp=26 qtab=1a1
 
 验不上的只有 ucode 和真码流：HCODEC 的 MMIO 在 QEMU 里不存在，碰一下就是同步外部
 abort（`hc_poweron+0x20` 实测），也没有 AMRISC 去执行厂商序列，所以 `VLC_TOTAL_BYTES`
-恒为 0。**真码流仍然只能实机验**（阶段 1b 的最后一格）。
+恒为 0。**真码流只能实机验** —— 上面「两个真 bug」那一节就是这一格的结果，
+两个都是 QEMU 断言不到的（signal 出去的 QP 对不对，只有解码器说得准）。
 
 另外记一笔踩了三轮的坑：`v4l2-ctl` 每帧从文件读的字节数是 **mmap 缓冲区长度**
 （`read_one_frame` 用 `q.g_length(j)`），而 vb2 会把它 `PAGE_ALIGN`。640x480 NV12 =
@@ -195,7 +227,7 @@ ctx，第二个 `open()` 直接 `-EBUSY`。
 `videobuf2-dma-contig.ko` 是 `=m` —— insmod 之前必须先 `modprobe` 这两个。
 （modpost 出来的 `depends:` 字段已经独立确认了这一条。）
 
-四个绕不开的实现约束（都是读厂商源码读出来的，不是猜的）：
+五个绕不开的实现约束（前四条是读厂商源码读出来的，第五条是实机测出来的）：
 
 1. **宽高圆到 16 的倍数**（1080 → 1088）。厂商驱动里没有 SPS `frame_cropping`，
    `crop_*` 只喂 ge2d 缩放器（venc.c:1344），所以显示区裁不了。
@@ -209,15 +241,32 @@ ctx，第二个 `open()` 直接 `-EBUSY`。
 4. **`PHYSICAL_BUFF` 不是 `LOCAL_BUFF`**：后者把 `request->src` 强行改成
    `dct_buff_start_addr`（vendor.inc:1194），V4L2 的缓冲区就喂不进去。
    `bytesperline` 必须等于 MFDIN 的跨度（NV12/NV21 对齐 32，YUV420 对齐 64）。
+5. **`slice_qp_delta ≡ 0`，且 `mb_qp_delta` 必须夹成 0**（见上面「两个真 bug」）。
+   连带两条：QP 只能在 IDR 换，`ENCODER_NON_IDR` 之后 ucode 报的是
+   `ENCODER_IDR_DONE(9)` 不是 `NON_IDR_DONE(10)`，两个状态得互认，只等 10 会超时。
 
 `device_run` 只 `queue_work`：`hc_wait` 要睡，而且 `v4l2_m2m_job_finish` 会当场
-回调下一轮，直接在里面编会递归（vim2m 的做法）。
+回调下一轮，直接在里面编会递归（vim2m 的做法）。完成信号除了轮询
+`ENCODER_STATUS`，还要认 `HCODEC_ASSIST_MBOX2_IRQ_REG` 位 0 并写
+`HCODEC_IRQ_MBOX_CLR`（厂商的 ISR 就干这个；不清的话下一帧的状态可能是上一帧的）。
 
-**板子回来要跑的三条**：`modprobe` 两个依赖 + `insmod`；`v4l2-ctl -d /dev/video0
---all` 看格式和控件；`ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30 -t 5
--pix_fmt nv12 -c:v h264_v4l2m2m -b:v 4M /tmp/t.h264` 然后 `ffprobe` 数关键帧
-——这一步才是**真码流**的第一次实机验证（寄存器编程那一半 QEMU 已经断言过了，
-见上面三行 `nohw#`；实机要答的是 ucode 吐出来的 P 帧字节能不能解）。
+**实机复现（2026-09-05，`/dev/video1`，`meson_vdec` 占了 video0）**：
+
+```sh
+modprobe v4l2-mem2mem videobuf2-dma-contig && insmod meson_hcodec.ko dbg=1
+# 控件和 streaming 必须同一次调用，控件名带 _value 后缀
+v4l2-ctl -d /dev/video1 \
+  --set-fmt-video-out=width=1280,height=768,pixelformat=NV12 \
+  --set-fmt-video=width=1280,height=768,pixelformat=H264 \
+  --set-ctrl=video_gop_size=10,h264_minimum_qp_value=26,h264_maximum_qp_value=26,\
+h264_i_frame_qp_value=26,h264_p_frame_qp_value=26 \
+  --stream-out-mmap 4 --stream-mmap --stream-count 10 \
+  --stream-from /tmp/pan.nv12 --stream-to /tmp/gop10.h264
+```
+
+板上没有 ffmpeg/ffprobe，码流 scp 回来解：IDR 54.8 dB，9 个 P 帧 52.9→49.2 dB
+且**不发散**（maxerr ≤ 14）。逐 MB QP 图用 `ffmpeg -debug qp -i x.h264 -f null -`
+看，现在整帧是平的 26。
 
 下面是阶段 1 的原始规划，1a 已经验证的部分标了 ✅：
 

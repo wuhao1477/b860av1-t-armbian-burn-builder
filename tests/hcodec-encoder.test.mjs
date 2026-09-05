@@ -7,9 +7,29 @@ import test from 'node:test';
 const src = fs.readFileSync(new URL('../tools/hcodec-mod/meson_hcodec.c', import.meta.url), 'utf8');
 const readme = fs.readFileSync(new URL('../tools/hcodec-mod/README.md', import.meta.url), 'utf8');
 
-test('P 帧 QP 差值走有符号运算', () => {
-  // qp_p < qp_i 时 u32 会下溢，clamp 反而吸到 qp_max —— 正好反了。
-  assert.match(src, /clamp_t\(int,\s*q \+ \(int\)ctx->qp_p - \(int\)ctx->qp_i/);
+test('slice QP 只能跟着 PPS 走，非 IDR 帧用缓存的 pic_init_qp', () => {
+  // GXL 的 FULL ucode 把 slice_qp_delta 恒写 0（实测 8 个码流，PPS 说多少 slice
+  // 就是多少）。所以 QP 只能在重发 SPS/PPS 的地方换，也就是 IDR；非 IDR 帧必须
+  // 沿用头里那个值，否则重建帧自洽而解码器按 PPS 反量化，整帧饱和（实测 4.4 dB）。
+  assert.match(src, /q = idr \? \(int\)ctx->cur_qp : \(int\)hc_hdr_qp;/);
+  assert.match(src, /if \(idr && q != \(int\)hc_hdr_qp\) \{\s*\n\s*hc_set_qp\(\(u32\)q\);\s*\n\s*ret = hc_headers\(\);/);
+  // streamon 也要先定 QP 再发头，否则第一个 IDR 白发一次 SPS/PPS。
+  const son = src.slice(src.indexOf('static int hc_hw_setup('));
+  assert.match(son.slice(0, son.indexOf('ret = hc_headers();')), /hc_set_qp\(ctx->cur_qp\);/);
+});
+
+test('mb_qp_delta 的幅度必须夹成 0', () => {
+  // 厂商开 ±26/25，但 ucode 只把 delta 写进码流、量化器不按它走：同一输入的 10 个
+  // IDR 解出来 7~26 dB 且每次不同。夹成 0 之后全部 51.8 dB、字节数 ±0.4%。
+  assert.match(src, /WRITE_HREG\(HCODEC_QDCT_VLC_QUANT_CTL_1, 0\);/);
+});
+
+test('IDR_DONE 和 NON_IDR_DONE 互认', () => {
+  // GXL 的 FULL ucode 收到 ENCODER_NON_IDR 之后照样报 9（IDR_DONE），
+  // 只等 10 会一直超时。
+  const done = src.slice(src.indexOf('static bool hc_done('));
+  assert.match(done.slice(0, done.indexOf('\n}')),
+    /want == ENCODER_IDR_DONE \|\| want == ENCODER_NON_IDR_DONE[\s\S]*?s == ENCODER_IDR_DONE \|\| s == ENCODER_NON_IDR_DONE/);
 });
 
 const hcWork = src.slice(src.indexOf('static void hc_work('), src.indexOf('static void hc_device_run('));

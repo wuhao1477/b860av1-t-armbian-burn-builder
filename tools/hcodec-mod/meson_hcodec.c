@@ -74,6 +74,10 @@ module_param(nohw, bool, 0444);
 MODULE_PARM_DESC(nohw,
 		 "假硬件：4 个 MMIO 窗口换成 RAM，轮询点自己应答，码流长度为 0；QEMU 上验寄存器编程用");
 
+static bool dbg;
+module_param(dbg, bool, 0644);
+MODULE_PARM_DESC(dbg, "每帧打一行 QP / 字节数 / VLC 落盘进度");
+
 /* 厂商头 + 切片，由 fetch-vendor.sh 放到同一个目录里 */
 #include "hcodec_regs.h"
 #include "dos_regs.h"
@@ -133,6 +137,7 @@ static dma_addr_t hc_pa;
 static struct encode_wq_s hc_wq;
 static struct dentry *hc_dir;
 static struct debugfs_blob_wrapper hc_blob;
+static struct debugfs_blob_wrapper hc_rec;
 static void *hc_out;
 static bool hc_powered;
 static bool hc_running;
@@ -293,6 +298,18 @@ static int hc_load_ucode(struct device *dev)
 	return 0;
 }
 
+/* 图像的完成码不区分 IDR / NON_IDR：厂商 ISR 收到 7/8/9/10 里任一个就算完
+ * （venc.c:2916、4037），从来不核对是哪一个。GXL 的 FULL ucode 实测在
+ * ENCODER_NON_IDR 之后报的是 ENCODER_IDR_DONE(9) —— 只死等 10 会白等到超时，
+ * 而 VLC_TOTAL_BYTES 那时其实已经有了（实机一帧 42143 字节）。
+ */
+static bool hc_done(u32 s, u32 want)
+{
+	if (want == ENCODER_IDR_DONE || want == ENCODER_NON_IDR_DONE)
+		return s == ENCODER_IDR_DONE || s == ENCODER_NON_IDR_DONE;
+	return s == want;
+}
+
 static int hc_wait(u32 want, unsigned int ms)
 {
 	unsigned int i;
@@ -311,16 +328,39 @@ static int hc_wait(u32 want, unsigned int ms)
 	for (i = 0; i < ms * 10; i++) {
 		u32 s = READ_HREG(ENCODER_STATUS);
 
-		if (s == want)
+		if (hc_done(s, want)) {
+			unsigned int j;
+
+			/* 完成的真信号是 mailbox2 中断，不是 ENCODER_STATUS：
+			 * ucode 先写 STATUS 再抬 mailbox，厂商靠 enc_isr 收它并
+			 * ack（venc.c:2903）。只看 STATUS 会在 ucode 收尾之前就
+			 * 返回，紧接着下一帧的寄存器序列就被 ucode 迟到的那次写
+			 * 盖掉 —— 实机 P 帧写 ENCODER_NON_IDR(4) 之后读回 9，
+			 * 就是这么来的。
+			 */
+			for (j = 0; j < 250; j++) {
+				if (READ_HREG(HCODEC_ASSIST_MBOX2_IRQ_REG) & 1)
+					break;
+				usleep_range(80, 160);
+			}
+			if (j == 250)
+				pr_warn_once("hcodec: status=%u 到了但 mailbox 没抬（irq=%08x）\n",
+					     want,
+					     READ_HREG(HCODEC_ASSIST_MBOX2_IRQ_REG));
+			WRITE_HREG(HCODEC_IRQ_MBOX_CLR, 1);
 			return 0;
+		}
 		if (s == ENCODER_ERROR) {
 			pr_err("hcodec: ucode 报 ENCODER_ERROR\n");
 			return -EIO;
 		}
 		usleep_range(80, 160);
 	}
-	pr_err("hcodec: 等 status=%u 超时，现在是 %u\n", want,
-	       READ_HREG(ENCODER_STATUS));
+	pr_err("hcodec: 等 status=%u 超时，现在是 %u（MPSR=%08x CPSR=%08x PC=%04x mbox=%08x bytes=%u）\n",
+	       want, READ_HREG(ENCODER_STATUS), READ_HREG(HCODEC_MPSR),
+	       READ_HREG(HCODEC_CPSR), READ_HREG(HCODEC_MPC_P),
+	       READ_HREG(HCODEC_ASSIST_MBOX2_IRQ_REG),
+	       READ_HREG(HCODEC_VLC_TOTAL_BYTES));
 	return -ETIMEDOUT;
 }
 
@@ -447,6 +487,7 @@ static int hc_hw_go(struct device *dev)
 static struct encode_request_s hc_rq;
 static u8 hc_hdr[64];	/* 缓存的 SPS+PPS，每个 IDR 前面重新贴一份 */
 static u32 hc_hdr_len;
+static u32 hc_hdr_qp;	/* 这份 PPS 里的 pic_init_qp，见 hc_work 的注释 */
 static u32 hc_nohw_seq;	/* nohw 的帧序号，只为让日志能逐帧断言 */
 
 static int hc_headers(void)
@@ -504,6 +545,7 @@ static int hc_headers(void)
 		return -EIO;
 	memcpy(hc_hdr, (u8 *)hc_va + wq->mem.bufspec.bitstream.buf_start, n);
 	hc_hdr_len = n;
+	hc_hdr_qp = wq->pic.init_qppicture;
 	return 0;
 }
 
@@ -541,6 +583,16 @@ static int hc_frame(bool idr, u32 src_phys, u32 fmt, u32 quant, u32 *bytes)
 	avc_init_input_buffer(wq);
 	avc_init_output_buffer(wq);
 	avc_prot_init(wq, rq, quant, idr);
+	/* 厂商把 VLC 的 per-MB 变 QP 幅度开到 ±26/25（vendor.inc:1534），但 GXL 的
+	 * FULL ucode 只把 mb_qp_delta **写进码流，自己的量化器不按它走**：实测重建帧
+	 * 在每个 QP 上都跟输入逐像素对得上，而解码器照码流里的逐 MB QP 反量化就越走
+	 * 越偏直到整帧饱和（`ffmpeg -debug qp` 在 slice QP 26 的帧里看到 5..50 的乱
+	 * 数，10 个同输入的 IDR 解出来 7~26 dB 且每次不同）。夹成 0，VLC 就只能写
+	 * mb_qp_delta = 0：同样 10 个 IDR 全部 51.8 dB、字节数 ±0.4%。
+	 * 从 CPU 清 VLC_ADV_CONFIG 的 use_q_delta_quant / hcmd_*use_q_info 没用
+	 * （ucode 会重写回去，实测更差）。
+	 */
+	WRITE_HREG(HCODEC_QDCT_VLC_QUANT_CTL_1, 0);
 	avc_init_assit_buffer(wq);
 	avc_init_dblk_buffer(wq->mem.dblk_buf_canvas);
 	avc_init_reference_buffer(wq->mem.ref_buf_canvas);
@@ -558,6 +610,29 @@ static int hc_frame(bool idr, u32 src_phys, u32 fmt, u32 quant, u32 *bytes)
 	if (ret)
 		return ret;
 	*bytes = READ_HREG(HCODEC_VLC_TOTAL_BYTES);
+
+	if (dbg) {
+		u32 vb = READ_HREG(HCODEC_VLC_VB_WR_PTR) -
+			 READ_HREG(HCODEC_VLC_VB_START_PTR);
+
+		usleep_range(2000, 2400);
+		pr_info("hcodec: idr=%d qp=%u total=%u vb=%u→%u\n",
+			idr, quant, *bytes, vb,
+			READ_HREG(HCODEC_VLC_VB_WR_PTR) -
+			READ_HREG(HCODEC_VLC_VB_START_PTR));
+	}
+
+	/* 编码器自己的重建帧（也就是下一帧的参考帧），从 debugfs 原样出去。
+	 * 拿它跟解码器输出逐字节比才分得清「P 帧质量差」和「重建不一致」：
+	 * 前者只是码率/QP，后者才是真 bug。canvas 是线性的，跨度＝ALIGN(w,32)。
+	 * 互换发生在下面，所以这里的 dblk 就是刚写完的那块。
+	 */
+	hc_rec.data = (u8 *)hc_va +
+		      ((wq->mem.dblk_buf_canvas & 0xff) == ENC_CANVAS_OFFSET ?
+		       wq->mem.bufspec.dec0_y.buf_start :
+		       wq->mem.bufspec.dec1_y.buf_start);
+	hc_rec.size = (size_t)ALIGN(wq->pic.encoder_width, 32) *
+		      ALIGN(wq->pic.encoder_height, 16);
 
 	/* 假硬件：把 ucode 本该读到的这一帧的状态原样打出来。QEMU 上就是靠这几行
 	 * 断言多帧/P 帧的寄存器编程（frame_num / POC 递增、dblk↔ref 互换、
@@ -774,13 +849,18 @@ static int hc_hw_setup(struct hc_ctx *ctx)
 	ret = hc_hw_prep(dev);
 	if (!ret)
 		ret = hc_hw_go(dev);
-	if (!ret)
+	if (!ret) {
+		/* PPS 的 pic_init_qp 就是整个 GOP 的 slice QP，所以先把 QP 定下来
+		 * 再发头，否则第一个 IDR 还要为了对齐 QP 多发一次 SPS/PPS。
+		 */
+		ctx->cur_qp = clamp(ctx->qp_i, ctx->qp_min, ctx->qp_max);
+		hc_set_qp(ctx->cur_qp);
 		ret = hc_headers();
+	}
 	if (ret) {
 		dev_err(dev, "V4L2 启动失败（%d）\n", ret);
 		return ret;
 	}
-	ctx->cur_qp = ctx->qp_i;
 	ctx->hw_ready = true;
 	return 0;
 }
@@ -834,15 +914,25 @@ static void hc_work(struct work_struct *w)
 		ret = -EFAULT;	/* DMABUF 进来的没有内核映射 */
 		goto done;
 	}
+	/* 码流里的 slice QP 只由 PPS 的 pic_init_qp 决定：GXL 的 FULL ucode 把
+	 * slice_qp_delta 恒写 0（实测 8 个码流，PPS 说多少 slice 就是多少），而量化
+	 * 用的是量化表里那个值。两者不一致的话重建帧自己完全自洽、解码器却按 PPS 的
+	 * QP 反量化 —— PPS 26 / 实量化 10 时整帧饱和成全白（实测 dec/in 4.4 dB，
+	 * 重建 58~71 dB）。所以 QP 只能在重发 SPS/PPS 的地方换，也就是 IDR；厂商
+	 * 就是这么干的（每个 IDR 先 ENCODER_SEQUENCE 再 ENCODER_PICTURE）。
+	 */
+	ctx->cur_qp = clamp(ctx->cur_qp, ctx->qp_min, ctx->qp_max);
+	q = idr ? (int)ctx->cur_qp : (int)hc_hdr_qp;
+	if (idr && q != (int)hc_hdr_qp) {
+		hc_set_qp((u32)q);
+		ret = hc_headers();
+		if (ret)
+			goto done;
+	}
 	if (idr) {
 		memcpy(out, hc_hdr, hc_hdr_len);
 		off = hc_hdr_len;
 	}
-	ctx->cur_qp = clamp(ctx->cur_qp, ctx->qp_min, ctx->qp_max);
-	q = ctx->cur_qp;
-	if (!idr)	/* I/P 的差值由控件给，反馈只动 cur_qp */
-		q = clamp_t(int, q + (int)ctx->qp_p - (int)ctx->qp_i,
-			    ctx->qp_min, ctx->qp_max);
 	ret = hc_frame(idr, (u32)vb2_dma_contig_plane_dma_addr(&src->vb2_buf, 0),
 		       hc_vendor_fmt(ctx->fourcc), q, &total);
 	if (!ret && off + total > vb2_plane_size(&dst->vb2_buf, 0))
@@ -1555,6 +1645,7 @@ static int __init hc_init(void)
 	dev_info(dev, "缓冲区 %u 字节 @ %pad\n", HC_BUF_SIZE, &hc_pa);
 
 	hc_dir = debugfs_create_dir("meson-hcodec", NULL);
+	debugfs_create_blob("rec.y", 0444, hc_dir, &hc_rec);
 
 	if (stage < 2) {
 		hc_mark("1 只做映射，停在这里");
