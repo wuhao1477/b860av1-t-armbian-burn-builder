@@ -66,6 +66,8 @@ HDMI   card0-HDMI-A-1 connected     eMMC DDR52 82 MB/s (/dev/mmcblk2p14 ext4)
 | [`docs/burn-image.md`](docs/burn-image.md) | **直刷包的设计、三次实机全黑的根因、刷机步骤** |
 | [`docs/frozen-inputs.md`](docs/frozen-inputs.md) | **冻结了哪些输入、怎么重钉、内核线为什么停在 5.10** |
 | [`docs/known-issues.md`](docs/known-issues.md) | 待解决问题，每条带证据和修它要动什么 |
+| [`docs/hardware-probes.md`](docs/hardware-probes.md) | **实机 `/dev/mem` 探测结论：HCODEC 硬编块是活的，附会让板子重启的坑** |
+| [`docs/hcodec-encoder-plan.md`](docs/hcodec-encoder-plan.md) | 硬件编码驱动的三阶段实施规划 |
 | [`docs/device-validation.md`](docs/device-validation.md) | raw 镜像那条线的实机证据采集流程 |
 | [`docs/history/`](docs/history/) | 早期设计文档，已被取代，只作溯源 |
 | [`CONTRIBUTING.md`](CONTRIBUTING.md) | 本地怎么跑、提 PR 的要求、迭代入口 |
