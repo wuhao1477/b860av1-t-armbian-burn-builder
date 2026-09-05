@@ -2,8 +2,9 @@
 
 **结论先行：分三阶段。阶段 0 用户态原型（**已完成，实机编出可解码的 IDR 帧**）→
 阶段 1a 树外内核模块（**已完成，insmod 时在内核里编出 IDR**）→ 阶段 1b 包成
-V4L2 M2M（**QEMU 上 `v4l2-compliance` 48/48 全过，实机只差 P 帧**，ffmpeg 的
-`h264_v4l2m2m` 不用打补丁就能跑）→ 阶段 2 上游化（可选，2 周+）。**
+V4L2 M2M（**QEMU 上 `v4l2-compliance` 48/48 全过、IDR/P/P 三帧的寄存器编程逐字段
+断言过，实机只差真码流**，ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑）→
+阶段 2 上游化（可选，2 周+）。**
 
 硬件已经确认可用，见 [`docs/hardware-probes.md`](hardware-probes.md)。
 这份文档只讲驱动怎么写。
@@ -113,7 +114,7 @@ CMA 里的旧数据，ucode 的 RD 决策会读它们。解码画面照样对得
    v1.1.0 之后一个都不在，重建花掉半小时。`mmio` 的源码现在进了仓库：
    [`tools/hcenc/mmio.c`](../tools/hcenc/mmio.c)。
 
-## 阶段 1b：包成 V4L2 M2M（QEMU 全过，等实机验证 P 帧）
+## 阶段 1b：包成 V4L2 M2M（QEMU 全过，等实机验证真码流）
 
 阶段 1a 的核心序列已经在内核里跑通，1b 把它包成 V4L2 stateful 编码器，
 让 ffmpeg 的 `h264_v4l2m2m` 和 gstreamer 的 `v4l2h264enc` 零补丁能用
@@ -215,7 +216,8 @@ ctx，第二个 `open()` 直接 `-EBUSY`。
 **板子回来要跑的三条**：`modprobe` 两个依赖 + `insmod`；`v4l2-ctl -d /dev/video0
 --all` 看格式和控件；`ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30 -t 5
 -pix_fmt nv12 -c:v h264_v4l2m2m -b:v 4M /tmp/t.h264` 然后 `ffprobe` 数关键帧
-——这一步才是 P 帧路径的第一次实机验证。
+——这一步才是**真码流**的第一次实机验证（寄存器编程那一半 QEMU 已经断言过了，
+见上面三行 `nohw#`；实机要答的是 ucode 吐出来的 P 帧字节能不能解）。
 
 下面是阶段 1 的原始规划，1a 已经验证的部分标了 ✅：
 
