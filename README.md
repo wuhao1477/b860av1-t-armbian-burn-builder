@@ -8,36 +8,34 @@
 
 ## 当前状态
 
-**已冻结在 v1.0.0。** 上游输入（raw release、资产摘要、内核版本）全部钉死在实机验证过
+**已冻结在 v1.1.0。** 上游输入（raw release、资产摘要、内核版本）全部钉死在实机验证过
 的那一组，构建不再自己跟到新版本 —— 上游换了东西 CI 会红，而不是悄悄出一个没上过机的
 包。冻结集合和重钉步骤见 [`docs/frozen-inputs.md`](docs/frozen-inputs.md)。
 
 | 产物 | 状态 | 说明 |
 |---|---|---|
-| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-03 实机刷入、进系统、六项预置全过、eMMC DDR52 82 MB/s；2026-09-04 换一次刷入复验；2026-09-05 `build-50.1` 再刷一次，七项预置全过（多了 H.264 硬解），见 [`docs/burn-image.md`](docs/burn-image.md) |
+| **`burn.img` 直刷包（变体 C）** | **`hardware-verified`** | 2026-09-03 实机刷入、进系统、六项预置全过、eMMC DDR52 82 MB/s；2026-09-04 换一次刷入复验；2026-09-05 `v1.1.0`（= `build-50.1`）再刷一次，七项预置全过（多了 H.264 硬解），见 [`docs/burn-image.md`](docs/burn-image.md) |
 | Armbian raw `.img.gz` | `container-valid / hardware-unverified` | 只做过容器与文件系统静态校验 |
 
-直接下载：[**`v1.0.0` 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)
-（解压后 `burn.img` sha256 `2303d1c5…`，六项预置全部实机验证通过：
-`root` / `password` 直接 SSH、zsh、根分区 5.1G、zram 400 MB、无首登向导、不等网络）。
+直接下载：[**`v1.1.0` 的 `burn.img.xz`**](https://github.com/wuhao1477/b860av1-t-armbian-burn-builder/releases/latest)
+（解压后 `burn.img` sha256 `188d8ff6…`，七项预置全部实机验证通过：
+`root` / `password` 直接 SSH、zsh、根分区 5.1G、zram 400 MB、无首登向导、不等网络、H.264 硬解）。
 刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
-**要 H.264 硬解就下 `build-50.1`**（`v1.0.0` 里没有微码）。这份字节 2026-09-05 也实机
-刷过、七项预置全过，只是还没接掉 `latest`。
-
-**要刷机只下 `latest`（现在是 `v1.0.0`）。** 其余 release 一律是 `Pre-release`，都不是
+**要刷机只下 `latest`（现在是 `v1.1.0`）。** 其余 release 一律是 `Pre-release`，都不是
 拿来刷的：
 
 | tag | 是什么 | 能刷吗 |
 |---|---|---|
-| `v1.0.0`（`latest`） | 直刷包，**这份字节流本身实机验证过** | **能** |
-| `b860-burn-…-build-50.1` | 多了 `meson-vdec` 微码（H.264 硬解），**这份字节也实机验证过** | 能 |
-| 其余 `b860-burn-*-build-N.M` | 每周自动出的直刷包，策略一致，但那些字节没上过机 | 自担风险 |
+| `v1.1.0`（`latest`） | 直刷包，含 H.264 硬解微码，**这份字节流本身实机验证过** | **能** |
+| `v1.0.0` | 上一版直刷包，没有微码所以没有硬解，同样实机验证过 | 能 |
+| `b860-burn-*-build-N.M` | 每周自动出的直刷包，策略一致，但那些字节没上过机（`build-50.1` 除外，它就是 `v1.1.0`） | 自担风险 |
 | `armbian-*-build-N.M` | raw `.img.gz` 线的每周产物，只做过容器与文件系统静态校验 | 不能直刷 |
 | `input-armbian-*` | 冻结的上游输入镜像，是构建的原料不是产物 | 否 |
 
 之前那批预置不完整的 `b860-burn-*`（`build-43.1` … `build-49.1`）已全部删除，避免有人
-下错来刷；`v1.0.0` 就是 `build-49.1` 那份实机验证过的字节，同一个 sha256。各项预置是
+下错来刷；`v1.0.0` 是 `build-49.1` 那份实机验证过的字节，`v1.1.0` 是 `build-50.1` 那份，
+各自同一个 sha256。各项预置是
 怎么一步步补齐的，记在 [`docs/known-issues.md`](docs/known-issues.md) 第 7 条。
 
 **刷完直接能用，没有首次开机向导。** 镜像里由
@@ -51,7 +49,7 @@
 | 根分区 | 首次开机 `resize2fs` 自己撑满 `data` 分区（8 GB eMMC 上 2.9G → 5.1G，实机确认） |
 | swap | zram 400 MB（`armbian-zram-config`，靠 `sysinit.target.d` drop-in 起来） |
 | 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统（首刷含 resize 30.6 s） |
-| 硬解 | `meson-vdec` 微码装在 `/lib/firmware/meson/vdec/`，H.264 实机解通（上游镜像里这个目录整个不存在，缺了 `VIDIOC_STREAMON` 直接 `-EINVAL`，见 [`docs/known-issues.md`](docs/known-issues.md) 第 10 条）。**`v1.0.0` 里没有，`build-50.1` 起才有** |
+| 硬解 | `meson-vdec` 微码装在 `/lib/firmware/meson/vdec/`，H.264 实机解通（上游镜像里这个目录整个不存在，缺了 `VIDIOC_STREAMON` 直接 `-EINVAL`，见 [`docs/known-issues.md`](docs/known-issues.md) 第 10 条）。**`v1.1.0` 起才有，`v1.0.0` 里没有** |
 
 swap 为什么一开始没起来（构建时写进 rootfs 的 `*.wants` 符号链接一条都没进镜像，同一
 毫秒写的常规文件全在），见 [`docs/known-issues.md`](docs/known-issues.md) 第 7、8 条。

@@ -31,8 +31,9 @@ release，所以 `SOURCE_DIGEST` 与合并前完全一致。`input-` 这个前�
 （`weekly-build.yml`，同一个仓库，每周一照常跑）—— 它产出的新 `armbian-*` 包**不会**
 自动成为直刷包的输入，要换得走下面的重钉流程。
 
-产出：`burn.img` sha256 `2303d1c58b0061e9a70d6159e27e546c382d06cf792f3680d69f3659b8f02822`，
-六项预置全部实机验证通过（见 [`docs/burn-image.md`](burn-image.md)）。
+产出（`v1.1.0`）：`burn.img` sha256 `188d8ff6ea26694eb565759c3a0fc477c432529ce6055beac524b2c8c1b2bccf`，
+七项预置全部实机验证通过（见 [`docs/burn-image.md`](burn-image.md)）。同一组冻结输入下
+`v1.0.0` 是 `2303d1c5…`，两者只差 `meson-vdec` 微码。
 
 ## 冻结是怎么强制的
 

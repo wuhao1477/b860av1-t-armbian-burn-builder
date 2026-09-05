@@ -415,7 +415,7 @@ dmesg                            Direct firmware load for meson/vdec/gxl_h264.bi
 微码不入库：仓库只放源码（CI 的 `inspectTrackedFiles` 盯着），而且这几个 `.bin` 是
 Amlogic 的可再分发二进制，不是 MIT。
 
-**`build-50.1` 刷机复验通过（2026-09-05）**，这次是「从包里出来的」而不是手工放的：
+**`build-50.1`（发布为 `v1.1.0`）刷机复验通过（2026-09-05）**，这次是「从包里出来的」而不是手工放的：
 
 ```
 是新镜像            up 5 min；SSH host key 变了；上一刷 apt 装的 v4l-utils 不在了
