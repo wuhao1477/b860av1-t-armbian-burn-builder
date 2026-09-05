@@ -22,10 +22,19 @@
 `root` / `password` 直接 SSH、zsh、根分区 5.1G、zram 400 MB、无首登向导、不等网络）。
 刷之前先看 [`docs/burn-image.md#刷机步骤`](docs/burn-image.md)——**「擦除 flash」必须勾**。
 
-**只有 `v1.0.0` 一个 release。** 之前那批预置不完整的 `b860-burn-*` prerelease
-（`build-43.1` … `build-49.1`）已全部删除，避免有人下错来刷；`v1.0.0` 就是
-`build-49.1` 那份实机验证过的字节，同一个 sha256。各项预置是怎么一步步补齐的，
-记在 [`docs/known-issues.md`](docs/known-issues.md) 第 7 条。
+**要刷机只下 `latest`（现在是 `v1.0.0`）。** 其余 release 一律是 `Pre-release`，都不是
+拿来刷的：
+
+| tag | 是什么 | 能刷吗 |
+|---|---|---|
+| `v1.0.0`（`latest`） | 直刷包，**这份字节流本身实机验证过** | **能** |
+| `b860-burn-*-build-N.M` | 每周自动出的直刷包，策略与 `v1.0.0` 一致，但这份字节没上过机 | 自担风险 |
+| `armbian-*-build-N.M` | raw `.img.gz` 线的每周产物，只做过容器与文件系统静态校验 | 不能直刷 |
+| `input-armbian-*` | 冻结的上游输入镜像，是构建的原料不是产物 | 否 |
+
+之前那批预置不完整的 `b860-burn-*`（`build-43.1` … `build-49.1`）已全部删除，避免有人
+下错来刷；`v1.0.0` 就是 `build-49.1` 那份实机验证过的字节，同一个 sha256。各项预置是
+怎么一步步补齐的，记在 [`docs/known-issues.md`](docs/known-issues.md) 第 7 条。
 
 **刷完直接能用，没有首次开机向导。** 镜像里由
 [`scripts/apply-rootfs-defaults.sh`](scripts/apply-rootfs-defaults.sh) 预置好：
