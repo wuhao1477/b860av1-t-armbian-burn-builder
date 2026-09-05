@@ -7,8 +7,29 @@ M2M 编码器。对应 [`../../docs/hcodec-encoder-plan.md`](../../docs/hcodec-e
 - **1a 已实机验证（2026-09-05）**：insmod 时在内核里编出 1280x720 Baseline IDR，
   4432 / 4597 / 4499 字节（热载 / `rmmod` 后冷载 / 开机从未上电），
   `ffprobe` 认 `key_frame=1 pict_type=I`。
-- **1b 代码已完成，等实机验证**：`ffmpeg -c:v h264_v4l2m2m` / `gst v4l2h264enc`
-  零补丁能用。
+- **1b 已编译通过（2026-09-05）**，等实机验证：`vermagic 5.10.268-ophub SMP
+  preempt mod_unload aarch64`、`depends v4l2-mem2mem,videobuf2-dma-contig`，
+  `W=1` 零告警。`ffmpeg -c:v h264_v4l2m2m` / `gst v4l2h264enc` 零补丁能用。
+
+## 不用板子也能编
+
+冻结的内核包里那份 `header-5.10.268-ophub.tar.gz` 就是板上的
+`/usr/src/linux-headers-5.10.268-ophub`，而且它自带的 `scripts/fixdep` /
+`scripts/mod/modpost` 是 **aarch64 ELF** —— 在 arm64 容器里原生跑，
+不用交叉编译，也不用 `make prepare`：
+
+```bash
+curl -fsSLo /tmp/k.tar.gz \
+  https://github.com/ophub/kernel/releases/download/kernel_stable/5.10.268.tar.gz
+tar xzf /tmp/k.tar.gz -O 5.10.268/header-5.10.268-ophub.tar.gz | tar xz -C /tmp/hdr
+tools/hcenc/fetch-vendor.sh /tmp/hcbuild
+docker run --rm --platform linux/arm64 -v /tmp/hdr:/hdr -v /tmp/hcbuild:/build \
+  debian:trixie bash -c 'apt-get update -qq && apt-get install -y -qq \
+  build-essential bc libelf1 && make -C /hdr M=/build ARCH=arm64 modules'
+```
+
+`debian:trixie` 的 gcc 是 14.2.0，和板上一致；vermagic 不编码 gcc 版本，
+MODVERSIONS 和签名都没开，所以出来的 `.ko` 直接 `insmod` 就行。
 
 ## 编译并加载
 

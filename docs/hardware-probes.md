@@ -150,6 +150,7 @@
 ### 还差什么
 
 用户态原型和树外内核模块都跑通了（阶段 0 / 1a，实机编出可解码的 IDR），
-V4L2 M2M 那层（阶段 1b）代码也写完了，等板子回来验证 `h264_v4l2m2m` 端到端。
+V4L2 M2M 那层（阶段 1b）已经对着 5.10.268-ophub 头文件树编译通过（`W=1` 零告警），
+等板子回来验证 `h264_v4l2m2m` 端到端 —— 多帧 / P 帧通路目前还是零实机验证。
 mainline 5.10 依旧一行 Amlogic 编码代码都没有（`meson-vdec` 只解码）。
 实施规划和实机结果见 [`docs/hcodec-encoder-plan.md`](hcodec-encoder-plan.md)。

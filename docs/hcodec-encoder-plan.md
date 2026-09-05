@@ -113,11 +113,25 @@ CMA 里的旧数据，ucode 的 RD 决策会读它们。解码画面照样对得
    v1.1.0 之后一个都不在，重建花掉半小时。`mmio` 的源码现在进了仓库：
    [`tools/hcenc/mmio.c`](../tools/hcenc/mmio.c)。
 
-## 阶段 1b：包成 V4L2 M2M（代码已完成，等实机验证）
+## 阶段 1b：包成 V4L2 M2M（已编译通过，等实机验证）
 
 阶段 1a 的核心序列已经在内核里跑通，1b 把它包成 V4L2 stateful 编码器，
 让 ffmpeg 的 `h264_v4l2m2m` 和 gstreamer 的 `v4l2h264enc` 零补丁能用
 （厂商那套 `/dev/amvenc_avc` ioctl 还得额外配 `libvpcodec`，不做）。
+
+**编译验证（2026-09-05，不需要板子）**：用冻结的 `5.10.268.tar.gz` 里的
+`header-5.10.268-ophub.tar.gz` 头文件树，在 arm64 容器里原生 kbuild ——
+头文件树自带的 `scripts/fixdep`、`scripts/mod/modpost` 就是 aarch64 ELF，
+所以不用交叉编译，`gcc 14.2.0` 和板上一致。
+
+| 项 | 结果 |
+| --- | --- |
+| `make -C hdr M=... ARCH=arm64 modules` | 干净通过，`W=1` 也零告警 |
+| `vermagic` | `5.10.268-ophub SMP preempt mod_unload aarch64` ← 和板子逐字一致 |
+| `depends` | `v4l2-mem2mem,videobuf2-dma-contig` ← modpost 实测，坐实了「必须先 modprobe」 |
+| `meson_hcodec.ko` | 56,216 B |
+
+复现命令见 [README](../tools/hcodec-mod/README.md) 的「不用板子也能编」。
 
 代码在 [`tools/hcodec-mod/`](../tools/hcodec-mod/)（用法见
 [README](../tools/hcodec-mod/README.md)）。单平面 `V4L2_CAP_VIDEO_M2M`，
@@ -128,6 +142,7 @@ ctx，第二个 `open()` 直接 `-EBUSY`。
 依赖已经从 rootfs 清单核对过，**不用等板子**：这颗内核里 `videodev` /
 `videobuf2-core` / `videobuf2-v4l2` 是 `=y`，而 `v4l2-mem2mem.ko` 和
 `videobuf2-dma-contig.ko` 是 `=m` —— insmod 之前必须先 `modprobe` 这两个。
+（modpost 出来的 `depends:` 字段已经独立确认了这一条。）
 
 四个绕不开的实现约束（都是读厂商源码读出来的，不是猜的）：
 
