@@ -1,8 +1,8 @@
 # HCODEC 编码驱动实施规划
 
-**结论先行：分三阶段，阶段 0 用户态原型（1 天）→ 阶段 1 树外 V4L2 模块（2–3 天）
-→ 阶段 2 上游化（可选，2 周+）。做到阶段 1 就够用了，ffmpeg 的
-`h264_v4l2m2m` 不用打补丁就能跑。**
+**结论先行：分三阶段，阶段 0 用户态原型（**已完成，实机编出可解码的 IDR 帧**）→
+阶段 1 树外 V4L2 模块（2–3 天）→ 阶段 2 上游化（可选，2 周+）。做到阶段 1 就够用了，
+ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑。**
 
 硬件已经确认可用，见 [`docs/hardware-probes.md`](hardware-probes.md)。
 这份文档只讲驱动怎么写。
@@ -19,7 +19,34 @@
 | 大页 | `/sys/kernel/mm/hugepages/` 有 **`hugepages-32768kB`** | 一个 32 MB 大页覆盖全部缓冲 → 阶段 0 不需要内核模块 |
 | canvas LUT | `DC_CAV_LUT_DATAL/DATAH/ADDR/RDATAL/RDATAH` = DMC 字索引 `0x12`–`0x16` → 字节 `0xc8838048`/`4c`/`50`/`54`/`58`，**有读回通道** | 用户态能直接配 canvas，且能先读回来确认没占用内核的索引 |
 
-## 阶段 0：用户态原型（约 1 天）
+## 阶段 0：用户态原型 ✅ 已完成（2026-09-05 实机）
+
+**结果：1280x720 Baseline IDR 帧，4,579 字节，`ffprobe` 认 `key_frame=1 pict_type=I`，
+解出来的画面和喂进去的合成 NV12 测试图逐像素一致。** 代码在
+[`tools/hcenc/`](../tools/hcenc/)，板子上跑完 `hcodec_down.sh` 归位，没有看门狗重启。
+
+```
+after-sequence STATUS=7 TOTAL=13    VB wr-start=0        <- SPS 还在 VLC FIFO 里
+after-picture  STATUS=8 TOTAL=21    VB wr-start=24       <- 这时才落 DRAM
+after-idr      STATUS=9 TOTAL=4579  VB wr-start=4584
+00 00 00 01 67 42 00 28 f4 02 80 2d c8   SPS (Baseline, level 4.0)
+00 00 00 01 68 ce 38 80                  PPS
+00 00 00 01 65 88 84 0f ...              IDR slice
+```
+
+三个当时不知道、现在知道的点（细节见 [`tools/hcenc/README.md`](../tools/hcenc/README.md)）：
+
+1. **`ENCODER_SEQUENCE_DONE` 时 VLC 不落盘。** `STATUS=7`、`VLC_TOTAL_BYTES=13`
+   全都像成功，但 `VLC_VB_WR_PTR` 还等于 `VLC_VB_START_PTR`，缓冲区全 0 ——
+   SPS 卡在 VLC 内部 FIFO。厂商也不在这儿读，它紧接着发 `ENCODER_PICTURE`
+   （venc.c:4045），只在 `PICTURE_DONE` 之后读。**顺序错了会以为码流丢了。**
+2. **`amvenc_start()` 只在重载 ucode 时调用**（`reload_flag`，venc.c:3316）。
+   普通命令只写 `ENCODER_STATUS`，AMRISC 一直在 `0xa05..0xa18` 的空转循环里等。
+3. **命令之间 VLC 用 `0xff` 补到 8 字节对齐**，会破坏前一个 NAL 的
+   `rbsp_trailing_bits`（只剥零字节的解码器会报 `non-existing PPS 0 referenced`）。
+   两段字节要分开写出去，别把补位一起存。
+
+原始规划（保留作对照）：
 
 目标：**编出一个 IDR 帧，`ffprobe` 能认。** 这一阶段的真正价值是在真硅片上把
 上千个寄存器值试对，改一行几秒钟就能重跑，不刷机、不签模块、崩了最多看门狗重启。

@@ -36,7 +36,7 @@ jobs:
       - name: Run tests
         run: pnpm test
       - name: Check shell syntax
-        run: bash -n scripts/*.sh
+        run: bash -n scripts/*.sh tools/hcenc/*.sh
       - name: Enforce source-only repository policy
         run: node --input-type=module -e "import { inspectTrackedFiles } from './src/repository-policy.mjs'; const violations = inspectTrackedFiles(new URL('.', import.meta.url)); if (violations.length) { console.error(violations.join('\\n')); process.exit(1); }"
 
