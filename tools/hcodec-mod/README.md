@@ -86,7 +86,8 @@ ssh root@<board> '
 | `poweron` | 1 | 自己做上电序列 |
 | `nohw` | 0 | 假硬件：4 个 MMIO 窗口换成 RAM，轮询点自己应答，码流长度为 0（QEMU 上验寄存器编程用） |
 | `blanket_reset` | 0 | 用厂商的 `DOS_SW_RESET1=0xffffffff`（会打断正在解码的 vdec） |
-| `dbg` | 0 | 每帧打一行 `idr= qp= total= vb=→` 和输入 Y 校验和 |
+| `dbg` | 0 | 每帧打一行 `idr= qp= total= vb=→` 和输入 Y 校验和；卡死时还会多打两条环占用 + 停在哪个宏块 |
+| `waitms` | 300 | 等一帧编完的上限。编通一帧实测 7 ms，超了就是 ucode 卡死，驱动会抬 QP 重编 |
 
 自测码流：`cat /sys/kernel/debug/meson-hcodec/out.h264 > /tmp/out.h264`。
 编码器自己的重建帧（查错用，跟解码结果对比就能分清是量化错还是 signal 错）：
@@ -129,6 +130,13 @@ ffprobe -show_frames -select_streams v /tmp/t.h264 | grep -c key_frame=1
    同一输入的 10 个 IDR 解出来 7~26 dB 且每次不同；夹成 0 之后全部 51.8 dB。
    连带一条：`ENCODER_NON_IDR` 之后 ucode 报的是 `IDR_DONE(9)`，两个 DONE 得互认。
    代价是码率控制只能在 IDR 边界生效，`h264_p_frame_qp_value` 表达不出来。
+5. **卡死了只能抬 QP 重编。** 帧里有「太贵」的宏块时，ucode 会原地卡死在
+   `ENCODER_MB_HEADER`（宏块位置冻住、AMRISC 的 PC 还在打转，两条环都不满）。
+   加时间、腾 VLC 环、替它应答 `*_DONE`、换 `IE_ME_MB_TYPE`、补回厂商的 SAD 率项，
+   全都叫不醒 —— 完整的排除清单在
+   [`../../docs/hcodec-encoder-plan.md`](../../docs/hcodec-encoder-plan.md)。
+   `hc_work()` 因此在 `-ETIMEDOUT` 上把 QP 抬 4 重编（并强制成 IDR 以重发 PPS），
+   抬过就记住下限；换分辨率时清掉。1280x768 要 QP26 会自己退到 QP34，40 dB 出片。
 
 `PHYSICAL_BUFF` 而不是 `LOCAL_BUFF`：后者会把 `request->src` 强行改成
 `dct_buff_start_addr`（vendor.inc:1194），V4L2 递进来的缓冲区就成了摆设。

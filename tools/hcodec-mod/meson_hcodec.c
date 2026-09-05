@@ -78,6 +78,10 @@ static bool dbg;
 module_param(dbg, bool, 0644);
 MODULE_PARM_DESC(dbg, "每帧打一行 QP / 字节数 / VLC 落盘进度");
 
+static uint waitms = 300;
+module_param(waitms, uint, 0644);
+MODULE_PARM_DESC(waitms, "等一帧编完的上限（毫秒）。实测编通一帧只要 7 ms，超了就是 ucode 卡死了，抬 QP 重来");
+
 /* 厂商头 + 切片，由 fetch-vendor.sh 放到同一个目录里 */
 #include "hcodec_regs.h"
 #include "dos_regs.h"
@@ -356,11 +360,32 @@ static int hc_wait(u32 want, unsigned int ms)
 		}
 		usleep_range(80, 160);
 	}
-	pr_err("hcodec: 等 status=%u 超时，现在是 %u（MPSR=%08x CPSR=%08x PC=%04x mbox=%08x bytes=%u）\n",
+	pr_warn("hcodec: 等 status=%u 超时，现在是 %u（MPSR=%08x CPSR=%08x PC=%04x mbox=%08x bytes=%u）\n",
 	       want, READ_HREG(ENCODER_STATUS), READ_HREG(HCODEC_MPSR),
 	       READ_HREG(HCODEC_CPSR), READ_HREG(HCODEC_MPC_P),
 	       READ_HREG(HCODEC_ASSIST_MBOX2_IRQ_REG),
 	       READ_HREG(HCODEC_VLC_TOTAL_BYTES));
+	/* 卡死取证：两条环的占用 + 停在哪个宏块。采两次（隔 2 ms）就能分清
+	 * 「不动了」和「只是慢」—— 实测 om_xy/vlc_mb 冻住而 PC 还在 0x08fc..0x0a17
+	 * 之间打转，也就是 ucode 在某个宏块上原地转圈，谁也叫不醒。
+	 */
+	if (!dbg)
+		return -ETIMEDOUT;
+	pr_warn("hcodec: dct 环 %u/%u（wr-rd=%d） vlc 环 %u/%u qdct_st=%08x vlc_st=%08x\n",
+	       READ_HREG(HCODEC_QDCT_MB_WR_PTR) - READ_HREG(HCODEC_QDCT_MB_START_PTR),
+	       READ_HREG(HCODEC_QDCT_MB_END_PTR) - READ_HREG(HCODEC_QDCT_MB_START_PTR),
+	       (int)(READ_HREG(HCODEC_QDCT_MB_WR_PTR) - READ_HREG(HCODEC_QDCT_MB_RD_PTR)),
+	       READ_HREG(HCODEC_VLC_VB_WR_PTR) - READ_HREG(HCODEC_VLC_VB_START_PTR),
+	       READ_HREG(HCODEC_VLC_VB_END_PTR) - READ_HREG(HCODEC_VLC_VB_START_PTR),
+	       READ_HREG(HCODEC_QDCT_STATUS_CTRL), READ_HREG(HCODEC_VLC_STATUS_CTRL));
+	for (i = 0; i < 2; i++) {
+		pr_warn("hcodec: 采样%u slice_ver=%08x dblk_xy=%08x om_xy=%08x vlc_mb=%08x ie_me_mb=%08x pc=%04x\n",
+		       i, READ_HREG(HCODEC_SLICE_VER_POS_PIC_TYPE),
+		       READ_HREG(HCODEC_DBLK_MB_XY), READ_HREG(HCODEC_MC_OM_MB_XY),
+		       READ_HREG(HCODEC_VLC_MB_INFO), READ_HREG(HCODEC_IE_ME_MB_INFO),
+		       READ_HREG(HCODEC_MPC_P));
+		usleep_range(2000, 2400);
+	}
 	return -ETIMEDOUT;
 }
 
@@ -385,11 +410,14 @@ static void hc_set_qp(u32 q)
 /* ------------------------------------------------------------------ */
 /* 工作队列：create_encode_work_queue + CONFIG_INIT 的最小可用子集       */
 /* ------------------------------------------------------------------ */
+static u32 hc_qp_floor;	/* 撞过 ucode 卡死之后记住的 QP 下限，见 hc_work 的重试循环 */
+
 static void hc_wq_init(u32 w, u32 h)
 {
 	struct encode_wq_s *wq = &hc_wq;
 
 	memset(wq, 0, sizeof(*wq));
+	hc_qp_floor = 0;	/* 换分辨率就重新探，小图能用的 QP 比大图低 */
 	wq->ucode_index = UCODE_MODE_FULL;
 	wq->pic.log2_max_frame_num = 4;
 	wq->pic.log2_max_pic_order_cnt_lsb = 4;
@@ -490,6 +518,18 @@ static u32 hc_hdr_len;
 static u32 hc_hdr_qp;	/* 这份 PPS 里的 pic_init_qp，见 hc_work 的注释 */
 static u32 hc_nohw_seq;	/* nohw 的帧序号，只为让日志能逐帧断言 */
 
+/* 模式判决的率项。厂商在 encode_wq_init 里把这三个偏移填进 request
+ * （venc.c:2973），avc_prot_init 再把它们写成 IE_WEIGHT / ME_WEIGHT /
+ * SAD_CONTROL_0/1 的 SAD offset；`memset(rq, 0, …)` 之后就一直是 0，
+ * 也就是 I4MB 零代价。补回来不解决卡死（实测过），但这是真漏了一项。
+ */
+static void hc_set_weights(struct encode_request_s *rq)
+{
+	rq->me_weight = ME_WEIGHT_OFFSET;
+	rq->i4_weight = I4MB_WEIGHT_OFFSET;
+	rq->i16_weight = I16MB_WEIGHT_OFFSET;
+}
+
 static int hc_headers(void)
 {
 	struct encode_wq_s *wq = &hc_wq;
@@ -504,6 +544,7 @@ static int hc_headers(void)
 	rq->quant = wq->pic.init_qppicture;
 	rq->type = LOCAL_BUFF;
 	rq->fmt = FMT_NV12;
+	hc_set_weights(rq);
 	rq->src = wq->mem.dct_buff_start_addr;
 	rq->framesize = wq->pic.encoder_width * wq->pic.encoder_height * 3 / 2;
 	rq->src_w = wq->pic.encoder_width;
@@ -575,6 +616,7 @@ static int hc_frame(bool idr, u32 src_phys, u32 fmt, u32 quant, u32 *bytes)
 	rq->src_w = wq->pic.encoder_width;
 	rq->src_h = wq->pic.encoder_height;
 	rq->framesize = wq->pic.encoder_width * wq->pic.encoder_height * 3 / 2;
+	hc_set_weights(rq);
 
 	hc_set_qp(quant);
 	amvenc_reset();
@@ -606,7 +648,7 @@ static int hc_frame(bool idr, u32 src_phys, u32 fmt, u32 quant, u32 *bytes)
 	avc_init_ie_me_parameter(wq, quant);
 	WRITE_HREG(FIXED_SLICE_CFG, 0);
 	WRITE_HREG(ENCODER_STATUS, cmd);
-	ret = hc_wait(idr ? ENCODER_IDR_DONE : ENCODER_NON_IDR_DONE, 8000);
+	ret = hc_wait(idr ? ENCODER_IDR_DONE : ENCODER_NON_IDR_DONE, waitms);
 	if (ret)
 		return ret;
 	*bytes = READ_HREG(HCODEC_VLC_TOTAL_BYTES);
@@ -923,18 +965,39 @@ static void hc_work(struct work_struct *w)
 	 */
 	ctx->cur_qp = clamp(ctx->cur_qp, ctx->qp_min, ctx->qp_max);
 	q = idr ? (int)ctx->cur_qp : (int)hc_hdr_qp;
-	if (idr && q != (int)hc_hdr_qp) {
-		hc_set_qp((u32)q);
-		ret = hc_headers();
-		if (ret)
-			goto done;
+	if (q < (int)hc_qp_floor) {
+		q = (int)hc_qp_floor;
+		idr = true;	/* 换 QP 必须重发 PPS，见上面 */
 	}
-	if (idr) {
-		memcpy(out, hc_hdr, hc_hdr_len);
-		off = hc_hdr_len;
+	for (;;) {
+		off = 0;
+		if (idr && q != (int)hc_hdr_qp) {
+			hc_set_qp((u32)q);
+			ret = hc_headers();
+			if (ret)
+				goto done;
+		}
+		if (idr) {
+			memcpy(out, hc_hdr, hc_hdr_len);
+			off = hc_hdr_len;
+		}
+		ret = hc_frame(idr,
+			       (u32)vb2_dma_contig_plane_dma_addr(&src->vb2_buf, 0),
+			       hc_vendor_fmt(ctx->fourcc), q, &total);
+		if (ret != -ETIMEDOUT || q >= 51)
+			break;
+		/* ucode 在「这一帧太贵」的宏块上会自己卡死在 MB_HEADER，谁也叫不醒
+		 * （实测：加时间到 45 s、腾码流环、替它应答 *_DONE、换 IE_ME_MB_TYPE、
+		 * 恢复厂商的 SAD 率项，全都不管用）。唯一可靠的出路是抬 QP 重编 ——
+		 * 抬过一次就记住下限，别每帧都去撞一遍。抬 QP 得重发 PPS，所以强制成 IDR。
+		 */
+		q = min(q + 4, 51);
+		hc_qp_floor = (u32)q;
+		idr = true;
+		pr_warn_once("hcodec: %ux%u 在 QP %u 上把 ucode 卡住了，抬到 %d 重编（以后从这里起）\n",
+			     hc_wq.pic.encoder_width, hc_wq.pic.encoder_height,
+			     ctx->cur_qp, q);
 	}
-	ret = hc_frame(idr, (u32)vb2_dma_contig_plane_dma_addr(&src->vb2_buf, 0),
-		       hc_vendor_fmt(ctx->fourcc), q, &total);
 	if (!ret && off + total > vb2_plane_size(&dst->vb2_buf, 0))
 		ret = -ENOSPC;
 	if (!ret) {

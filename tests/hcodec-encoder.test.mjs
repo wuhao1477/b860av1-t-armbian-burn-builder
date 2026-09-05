@@ -134,3 +134,18 @@ test('构建脚本必须核对冻结内核包的摘要，并按包里的名字�
   assert.match(builder, /cc -O2 -o scripts\/basic\/fixdep scripts\/basic\/fixdep\.c/);
   assert.match(builder, /ARCH=arm64 CROSS_COMPILE="\$cross" M="\$work\/build" modules/);
 });
+
+test('ucode 卡死只能靠抬 QP 重编，而且要记住下限', () => {
+  // 实机结论：某些宏块会让 FULL ucode 原地卡死在 ENCODER_MB_HEADER（om_xy/vlc_mb
+  // 冻住、PC 还在打转），等 45 s、腾 VLC 环、替它应答 *_DONE、换 IE_ME_MB_TYPE、
+  // 补回厂商的 SAD 率项，全都叫不醒。唯一出路是抬 QP 重编这一帧。
+  const work = src.slice(src.indexOf('static void hc_work('));
+  assert.match(work, /if \(ret != -ETIMEDOUT \|\| q >= 51\)\s*\n\s*break;/);
+  assert.match(work, /q = min\(q \+ 4, 51\);\s*\n\s*hc_qp_floor = \(u32\)q;/);
+  // 抬 QP 必须重发 PPS，否则解码器按旧 pic_init_qp 反量化，整帧饱和。
+  assert.match(work, /hc_qp_floor = \(u32\)q;\s*\n\s*idr = true;/);
+  // 换分辨率要重探：小图能用的 QP 比大图低。
+  assert.match(src, /memset\(wq, 0, sizeof\(\*wq\)\);\s*\n\s*hc_qp_floor = 0;/);
+  // 编通一帧只要 7 ms，8 s 的超时会让每次重试都停半天。
+  assert.match(src, /static uint waitms = 300;/);
+});
