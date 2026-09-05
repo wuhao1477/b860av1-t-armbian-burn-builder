@@ -2,7 +2,8 @@
 
 **结论先行：分三阶段。阶段 0 用户态原型（**已完成，实机编出可解码的 IDR 帧**）→
 阶段 1a 树外内核模块（**已完成，insmod 时在内核里编出 IDR**）→ 阶段 1b 包成
-V4L2 M2M（进行中，ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑）→ 阶段 2 上游化（可选，2 周+）。**
+V4L2 M2M（**代码已完成，等板子回来验证**，ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑）→
+阶段 2 上游化（可选，2 周+）。**
 
 硬件已经确认可用，见 [`docs/hardware-probes.md`](hardware-probes.md)。
 这份文档只讲驱动怎么写。
@@ -112,11 +113,44 @@ CMA 里的旧数据，ucode 的 RD 决策会读它们。解码画面照样对得
    v1.1.0 之后一个都不在，重建花掉半小时。`mmio` 的源码现在进了仓库：
    [`tools/hcenc/mmio.c`](../tools/hcenc/mmio.c)。
 
-## 阶段 1b：包成 V4L2 M2M（进行中）
+## 阶段 1b：包成 V4L2 M2M（代码已完成，等实机验证）
 
-阶段 1a 的核心序列已经在内核里跑通，剩下的是把它包成 V4L2 stateful 编码器，
+阶段 1a 的核心序列已经在内核里跑通，1b 把它包成 V4L2 stateful 编码器，
 让 ffmpeg 的 `h264_v4l2m2m` 和 gstreamer 的 `v4l2h264enc` 零补丁能用
 （厂商那套 `/dev/amvenc_avc` ioctl 还得额外配 `libvpcodec`，不做）。
+
+代码在 [`tools/hcodec-mod/`](../tools/hcodec-mod/)（用法见
+[README](../tools/hcodec-mod/README.md)）。单平面 `V4L2_CAP_VIDEO_M2M`，
+OUTPUT 收 NV12/NV21/YUV420 → CAPTURE 出 H.264，`vb2_dma_contig` +
+`VB2_MMAP | VB2_DMABUF`。硬件只有一份参考帧和一套 canvas，所以只允许一个
+ctx，第二个 `open()` 直接 `-EBUSY`。
+
+依赖已经从 rootfs 清单核对过，**不用等板子**：这颗内核里 `videodev` /
+`videobuf2-core` / `videobuf2-v4l2` 是 `=y`，而 `v4l2-mem2mem.ko` 和
+`videobuf2-dma-contig.ko` 是 `=m` —— insmod 之前必须先 `modprobe` 这两个。
+
+四个绕不开的实现约束（都是读厂商源码读出来的，不是猜的）：
+
+1. **宽高圆到 16 的倍数**（1080 → 1088）。厂商驱动里没有 SPS `frame_cropping`，
+   `crop_*` 只喂 ge2d 缩放器（venc.c:1344），所以显示区裁不了。
+2. **每帧整套重新初始化。** ISR 在每个 `*_DONE` 之后置 `need_reset`（venc.c:2928），
+   `avc_init_encoder()` 因此每帧都跑 —— 它是 `IDR_PIC_ID` / `FRAME_NUMBER` /
+   `PIC_ORDER_CNT_LSB` / `QPPICTURE` 和 `VLC_TOTAL_BYTES=0` 的唯一写入者。
+   帧后推进（`idr_pic_id++`、`pic_order_cnt_lsb += 2`、dblk ↔ ref canvas 互换）
+   照 `AMVENC_AVC_IOC_SUBMIT`（venc.c:3875）做。
+3. **QP 走量化表**，不走 `avc_prot_init()` 的 `quant` 参数：GXBB+ 的 FULL ucode
+   会用 `quant_tbl_i4/i16[id][0] & 0xff` 反算 `i_pic_qp`（vendor.inc:1509）。
+4. **`PHYSICAL_BUFF` 不是 `LOCAL_BUFF`**：后者把 `request->src` 强行改成
+   `dct_buff_start_addr`（vendor.inc:1194），V4L2 的缓冲区就喂不进去。
+   `bytesperline` 必须等于 MFDIN 的跨度（NV12/NV21 对齐 32，YUV420 对齐 64）。
+
+`device_run` 只 `queue_work`：`hc_wait` 要睡，而且 `v4l2_m2m_job_finish` 会当场
+回调下一轮，直接在里面编会递归（vim2m 的做法）。
+
+**板子回来要跑的三条**：`modprobe` 两个依赖 + `insmod`；`v4l2-ctl -d /dev/video0
+--all` 看格式和控件；`ffmpeg -f lavfi -i testsrc=size=1280x720:rate=30 -t 5
+-pix_fmt nv12 -c:v h264_v4l2m2m -b:v 4M /tmp/t.h264` 然后 `ffprobe` 数关键帧
+——这一步才是 P 帧路径的第一次实机验证。
 
 下面是阶段 1 的原始规划，1a 已经验证的部分标了 ✅：
 
