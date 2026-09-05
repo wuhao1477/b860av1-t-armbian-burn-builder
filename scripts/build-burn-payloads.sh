@@ -129,7 +129,12 @@ sudo dd if="$root_part" of="$tmp/rootfs.ext4" bs=4M status=none
 # 它是不是又掉了留给下一次实机对照。
 zram_dropin=/etc/systemd/system/sysinit.target.d/10-b860-armbian-zram-config.conf
 expand_dropin=/etc/systemd/system/multi-user.target.d/10-b860-expand-rootfs.conf
-for dropin in "$zram_dropin" "$expand_dropin"; do
+mapfile -t vdec_blobs < <(node -e '
+  const fs = require("fs");
+  const spec = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).vdecFirmware;
+  for (const file of Object.keys(spec.files)) console.log(`${spec.installPath}/${file}`);
+' "$root/config/board.json")
+for dropin in "$zram_dropin" "$expand_dropin" "${vdec_blobs[@]}"; do
   sudo debugfs -R "stat $dropin" "$tmp/rootfs.ext4" 2>&1 | grep -q '^Inode:' || {
     echo "drop-in is missing from the packaged rootfs: $dropin" >&2
     exit 1

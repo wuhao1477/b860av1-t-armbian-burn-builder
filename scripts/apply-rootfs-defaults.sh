@@ -235,3 +235,47 @@ PROFILE
 else
   say '没有 board-inputs/wifi.env，跳过 WiFi 预置'
 fi
+
+# ---- 6. meson-vdec 解码微码 ---------------------------------------------
+# 上游 Armbian 镜像里 /lib/firmware/meson/ 整个目录都没有，所以 `/dev/video0`
+# 在、格式也枚举得出 H264/MPG2/VP90，一 VIDIOC_STREAMON 就 -EINVAL，dmesg 里才
+# 看到 `Direct firmware load for meson/vdec/gxl_h264.bin failed with error -2`。
+# 实机对照过两遍：补上 gxl_h264.bin 后 1280x720 的 20 帧全解出来（NM12，
+# 高度按 64 对齐成 768），把它挪走立刻退回 -EINVAL。
+#
+# 钉死的 commit 和 sha256 在 config/board.json 的 vdecFirmware 里。测试用
+# VDEC_FIRMWARE_DIR 指到一个假目录来跳过下载（和上面的 SUDO= 一个套路）；
+# 不设就自己下，让手工跑这个脚本也能得到完整结果。
+firmware_dir=${VDEC_FIRMWARE_DIR-}
+firmware_tmp=''
+if [[ -z "$firmware_dir" ]]; then
+  firmware_tmp=$(mktemp -d)
+  trap 'rm -rf "$firmware_tmp"' EXIT
+  "$(dirname -- "${BASH_SOURCE[0]}")/fetch-vdec-firmware.sh" "$firmware_tmp"
+  firmware_dir=$firmware_tmp
+fi
+firmware_target=$(node -e '
+  const fs = require("fs");
+  console.log(JSON.parse(fs.readFileSync(process.argv[1], "utf8")).vdecFirmware.installPath);
+' "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/config/board.json")
+[[ "$firmware_target" == /lib/firmware/* ]] || {
+  echo "vdecFirmware.installPath must live under /lib/firmware: $firmware_target" >&2
+  exit 1
+}
+$sudo mkdir -p "$root_mount$firmware_target"
+shopt -s nullglob
+firmware_files=("$firmware_dir"/*.bin)
+shopt -u nullglob
+[[ ${#firmware_files[@]} -gt 0 ]] || { echo "no vdec firmware in $firmware_dir" >&2; exit 1; }
+for blob in "${firmware_files[@]}"; do
+  $sudo cp -- "$blob" "$root_mount$firmware_target/"
+  $sudo chmod 0644 "$root_mount$firmware_target/$(basename -- "$blob")"
+done
+# 后置断言，同 §1/§2：少一个文件就是发一个硬解不能用的包。
+for blob in "${firmware_files[@]}"; do
+  $sudo test -f "$root_mount$firmware_target/$(basename -- "$blob")" || {
+    echo "vdec firmware did not land in the rootfs: $(basename -- "$blob")" >&2
+    exit 1
+  }
+done
+say "已装 ${#firmware_files[@]} 个 vdec 微码到 $firmware_target"

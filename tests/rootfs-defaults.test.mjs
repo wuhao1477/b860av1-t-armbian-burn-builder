@@ -13,6 +13,10 @@ const script = path.join(root, 'scripts/apply-rootfs-defaults.sh');
 //   openssl passwd -6 -salt b860burn password
 const rootHash = '$6$b860burn$21d1hZz5IOJZocmktz6vVDYwbPhywU7WZtS.7vOC73/M5HGWXUs0SBGFcIbsgfQBh1MwgdtMvQyG8HO2lACOj/';
 
+// meson-vdec 的微码在 board.json 里钉死（commit + sha256）。测试只用文件名，
+// 内容随便 —— 真下载由 scripts/fetch-vdec-firmware.sh 负责，测试不联网。
+const vdec = JSON.parse(fs.readFileSync(path.join(root, 'config/board.json'), 'utf8')).vdecFirmware;
+
 // 造一个刚好够 apply-rootfs-defaults.sh 认得出来的 rootfs：
 // 上游 Armbian 里这几个文件的位置和 [Install] 段都是实机确认过的。
 function fakeRootfs(context) {
@@ -36,13 +40,22 @@ function fakeRootfs(context) {
   ]) fs.writeFileSync(path.join(directory, 'usr/lib/systemd/system', unit), `[Install]\nWantedBy=${target}\n`);
   fs.symlinkSync('/usr/lib/systemd/system/NetworkManager-wait-online.service',
     path.join(directory, 'etc/systemd/system/network-online.target.wants/NetworkManager-wait-online.service'));
+  // 微码桩目录，见 apply()。放在 rootfs 树里但 §6 不看它，和 sudo-stub 一个套路。
+  fs.mkdirSync(path.join(directory, 'vdec-stub'));
+  for (const file of Object.keys(vdec.files)) {
+    fs.writeFileSync(path.join(directory, 'vdec-stub', file), `stub ${file}\n`);
+  }
   return directory;
 }
 
-function apply(directory) {
+function apply(directory, extra = {}) {
   // SUDO= 关掉 sudo：临时目录归当前用户，真跑时 rootfs 里的文件才需要 root。
+  // VDEC_FIRMWARE_DIR 指到桩目录，否则每个测试都会去 git.kernel.org 下微码。
   return childProcess.spawnSync('bash', [script, directory], {
-    encoding: 'utf8', env: { ...process.env, SUDO: '' },
+    encoding: 'utf8',
+    env: {
+      ...process.env, SUDO: '', VDEC_FIRMWARE_DIR: path.join(directory, 'vdec-stub'), ...extra,
+    },
   });
 }
 
@@ -74,9 +87,7 @@ test('rootfs defaults fail loudly when the root password hash does not stick', (
   const stub = path.join(directory, 'sudo-stub');
   fs.writeFileSync(stub, '#!/bin/sh\n[ "$1" = cp ] && exit 0\nexec "$@"\n', { mode: 0o755 });
 
-  const result = childProcess.spawnSync('bash', [script, directory], {
-    encoding: 'utf8', env: { ...process.env, SUDO: stub },
-  });
+  const result = apply(directory, { SUDO: stub });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /root password hash was not applied/);
@@ -90,9 +101,7 @@ test('rootfs defaults fail loudly when the first-login marker survives', (contex
   const stub = path.join(directory, 'sudo-stub');
   fs.writeFileSync(stub, '#!/bin/sh\n[ "$1" = rm ] && exit 0\nexec "$@"\n', { mode: 0o755 });
 
-  const result = childProcess.spawnSync('bash', [script, directory], {
-    encoding: 'utf8', env: { ...process.env, SUDO: stub },
-  });
+  const result = apply(directory, { SUDO: stub });
 
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /first-login marker survived/);
@@ -170,6 +179,35 @@ test('rootfs defaults are idempotent and ship no credentials by default', (conte
   assert.ok(!exists(directory, 'etc/NetworkManager/system-connections'));
 });
 
+test('rootfs defaults install the meson-vdec firmware that hardware decode needs', (context) => {
+  // 实机对照过两遍：上游镜像里 /lib/firmware/meson/ 整个目录都没有，所以 /dev/video0
+  // 在、格式也枚举得出 H264，一 VIDIOC_STREAMON 就 -EINVAL（dmesg: firmware load for
+  // meson/vdec/gxl_h264.bin failed with error -2）。补上 gxl_h264.bin 后 1280x720 的
+  // 20 帧全解出来，把它挪走立刻退回 -EINVAL。
+  const directory = fakeRootfs(context);
+
+  assert.equal(apply(directory).status, 0);
+
+  assert.match(vdec.installPath, /^\/lib\/firmware\//);
+  for (const file of Object.keys(vdec.files)) {
+    const blob = path.join(directory, vdec.installPath.replace(/^\//, ''), file);
+    assert.ok(fs.existsSync(blob), `${file} must land in the rootfs`);
+    assert.equal(fs.statSync(blob).mode & 0o777, 0o644);
+  }
+});
+
+test('rootfs defaults fail loudly when no vdec firmware is available', (context) => {
+  // 空目录静默通过 = 发一个硬解不能用的包，而实机上看起来像驱动坏了。
+  const directory = fakeRootfs(context);
+  const empty = path.join(directory, 'vdec-empty');
+  fs.mkdirSync(empty);
+
+  const result = apply(directory, { VDEC_FIRMWARE_DIR: empty });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /no vdec firmware in/);
+});
+
 test('the packager verifies the preseed on the image it is about to sparse', () => {
   // 「脚本打印了启用」和「字节真的在包里」是两件事，build-47.1 就是在这里出事的。
   // 所以 dd 之后必须用 debugfs 复查一遍 drop-in，缺了让构建红。
@@ -182,7 +220,9 @@ test('the packager verifies the preseed on the image it is about to sparse', () 
   assert.match(between, /drop-in is missing from the packaged rootfs/);
   assert.match(packager, /zram_dropin=\/etc\/systemd\/system\/sysinit\.target\.d\/10-b860-armbian-zram-config\.conf/);
   assert.match(packager, /expand_dropin=\/etc\/systemd\/system\/multi-user\.target\.d\/10-b860-expand-rootfs\.conf/);
-  assert.match(between, /for dropin in "\$zram_dropin" "\$expand_dropin"/);
+  // 微码走同一个 debugfs 循环：清单从 board.json 读，加第四个文件不用改脚本。
+  assert.match(between, /for dropin in "\$zram_dropin" "\$expand_dropin" "\$\{vdec_blobs\[@\]\}"/);
+  assert.match(between, /vdecFirmware/);
 });
 
 test('rootfs defaults reject a directory that is not a rootfs', (context) => {

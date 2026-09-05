@@ -30,5 +30,18 @@
     "patchSourceUrl": "https://github.com/armbian/build/blob/main/config/optional/boards/aml-s9xx-box/_packages/bsp-cli/boot/build-u-boot/u-boot-s905x-s912.patch"
   },
   "bootloaderGapMiB": 4,
-  "hardwareStatus": "hardware-unverified"
+  "hardwareStatus": "hardware-unverified",
+  "vdecFirmware": {
+    "note": "meson-vdec 的解码微码。上游 Armbian 镜像里 /lib/firmware/meson/ 整个目录都没有，缺了 VIDIOC_STREAMON 直接 -EINVAL。",
+    "installPath": "/lib/firmware/meson/vdec",
+    "repository": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git",
+    "commit": "fb505a691b2a37b9d1fc20617433dfd52fb6e27e",
+    "urlTemplate": "https://git.kernel.org/pub/scm/linux/kernel/git/firmware/linux-firmware.git/plain/meson/vdec/{file}?id={commit}",
+    "license": "Redistributable, see LICENSE.amlogic_vdec in linux-firmware WHENCE",
+    "files": {
+      "gxl_h264.bin": "fbefe7ec333a05c6dad03b21145b0b2766bbc033c8d1855f91aeea123f485bec",
+      "gxl_mpeg12.bin": "4a851302785a48e84cb846e5e974a4f51a4ca87c52d961aab4307b1c91daf2b2",
+      "gxl_vp9.bin": "cf40af8d5e8b02a247c28f99cd8afe8094e4c4078817e37c4c98f57c57e87998"
+    }
+  }
 }
