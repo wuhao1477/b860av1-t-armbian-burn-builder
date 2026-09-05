@@ -72,7 +72,7 @@ module_param_named(log_level, hc_log_level, uint, 0644);
 MODULE_PARM_DESC(log_level, "厂商日志阈值：0 全开 3 只报错（默认 3）");
 module_param(nohw, bool, 0444);
 MODULE_PARM_DESC(nohw,
-		 "一个 HCODEC 寄存器都不碰，编出来的帧长度为 0；QEMU 上验 V4L2 协议用");
+		 "假硬件：4 个 MMIO 窗口换成 RAM，轮询点自己应答，码流长度为 0；QEMU 上验寄存器编程用");
 
 /* 厂商头 + 切片，由 fetch-vendor.sh 放到同一个目录里 */
 #include "hcodec_regs.h"
@@ -251,26 +251,35 @@ static int hc_load_ucode(struct device *dev)
 	unsigned long spins = 0;
 	int ret;
 
-	hc_mark("4a ucode: request_firmware");
-	ret = request_firmware(&fw, HC_FW_NAME, dev);
-	if (ret) {
-		dev_err(dev, "缺 %s（%d）\n", HC_FW_NAME, ret);
-		return ret;
-	}
-	if (fw->size < HC_FW_GXL_OFF + HC_UCODE_LEN) {
-		dev_err(dev, "%s 只有 %zu 字节，装不下 gxl 载荷\n", HC_FW_NAME,
-			fw->size);
+	if (nohw) {
+		/* 假硬件里没有 AMRISC 去执行它，ucode 本身无从验证；DMA 那几个
+		 * 寄存器照写，好让这条路径的其余部分照常跑。
+		 */
+		hc_mark("4a ucode: nohw 跳过 request_firmware");
+	} else {
+		hc_mark("4a ucode: request_firmware");
+		ret = request_firmware(&fw, HC_FW_NAME, dev);
+		if (ret) {
+			dev_err(dev, "缺 %s（%d）\n", HC_FW_NAME, ret);
+			return ret;
+		}
+		if (fw->size < HC_FW_GXL_OFF + HC_UCODE_LEN) {
+			dev_err(dev, "%s 只有 %zu 字节，装不下 gxl 载荷\n",
+				HC_FW_NAME, fw->size);
+			release_firmware(fw);
+			return -EINVAL;
+		}
+		memcpy((u8 *)hc_va + HC_UCODE_OFF, fw->data + HC_FW_GXL_OFF,
+		       HC_UCODE_LEN);
 		release_firmware(fw);
-		return -EINVAL;
 	}
-	memcpy((u8 *)hc_va + HC_UCODE_OFF, fw->data + HC_FW_GXL_OFF,
-	       HC_UCODE_LEN);
-	release_firmware(fw);
 
 	hc_mark("4c ucode: IMEM DMA");
 	WRITE_HREG(HCODEC_IMEM_DMA_ADR, (u32)(hc_pa + HC_UCODE_OFF));
 	WRITE_HREG(HCODEC_IMEM_DMA_COUNT, 0x1000);
 	WRITE_HREG(HCODEC_IMEM_DMA_CTRL, 0x8000 | (7 << 16));
+	if (nohw)	/* 实机上是 DMA 引擎自己清 0x8000 的，这里替它清 */
+		WRITE_HREG(HCODEC_IMEM_DMA_CTRL, 0x00071000);
 	while (READ_HREG(HCODEC_IMEM_DMA_CTRL) & 0x8000) {
 		if (++spins > 1000000UL) {
 			dev_err(dev, "IMEM DMA 超时 ctrl=0x%08x\n",
@@ -287,6 +296,17 @@ static int hc_load_ucode(struct device *dev)
 static int hc_wait(u32 want, unsigned int ms)
 {
 	unsigned int i;
+
+	/* 假硬件：没有 ucode 会去改 ENCODER_STATUS，所以替它应答。SPS+PPS 那步
+	 * 还要一个 1..64 的字节数（实机是 21），不然 hc_headers 直接 -EIO；
+	 * 帧的字节数保持 0 —— 这条路不产生任何真码流。
+	 */
+	if (nohw) {
+		WRITE_HREG(ENCODER_STATUS, want);
+		if (want == ENCODER_PICTURE_DONE)
+			WRITE_HREG(HCODEC_VLC_TOTAL_BYTES, 21);
+		return 0;
+	}
 
 	for (i = 0; i < ms * 10; i++) {
 		u32 s = READ_HREG(ENCODER_STATUS);
@@ -427,6 +447,7 @@ static int hc_hw_go(struct device *dev)
 static struct encode_request_s hc_rq;
 static u8 hc_hdr[64];	/* 缓存的 SPS+PPS，每个 IDR 前面重新贴一份 */
 static u32 hc_hdr_len;
+static u32 hc_nohw_seq;	/* nohw 的帧序号，只为让日志能逐帧断言 */
 
 static int hc_headers(void)
 {
@@ -537,6 +558,18 @@ static int hc_frame(bool idr, u32 src_phys, u32 fmt, u32 quant, u32 *bytes)
 	if (ret)
 		return ret;
 	*bytes = READ_HREG(HCODEC_VLC_TOTAL_BYTES);
+
+	/* 假硬件：把 ucode 本该读到的这一帧的状态原样打出来。QEMU 上就是靠这几行
+	 * 断言多帧/P 帧的寄存器编程（frame_num / POC 递增、dblk↔ref 互换、
+	 * QP 表重填），见 scripts/hcodec-v4l2-qemu.sh。
+	 */
+	if (nohw)
+		pr_info("hcodec: nohw#%u idr=%d idr_pic_id=%u frame_num=%u poc=%u rec=%06x anc=%06x qp=%u qtab=%08x\n",
+			++hc_nohw_seq, idr, READ_HREG(IDR_PIC_ID),
+			READ_HREG(FRAME_NUMBER), READ_HREG(PIC_ORDER_CNT_LSB),
+			READ_HREG(HCODEC_REC_CANVAS_ADDR),
+			READ_HREG(HCODEC_ANC0_CANVAS_ADDR), quant,
+			READ_HREG(HCODEC_QUANT_TABLE_DATA));
 
 	/* 帧后推进，对应厂商的 AMVENC_AVC_IOC_SUBMIT（venc.c:3875）：计数器是
 	 * 编完这帧才动的，所以 IDR 编出来是 frame_num=0，下一帧才是 1；
@@ -730,14 +763,6 @@ static int hc_hw_setup(struct hc_ctx *ctx)
 
 	if (ctx->hw_ready)
 		return 0;
-	/* nohw：QEMU virt 上 HCODEC 的 MMIO 根本不存在，读一下就是同步外部 abort
-	 * （实测 hc_poweron+0x20 直接 oops）。这条路只让 V4L2 状态机跑起来。
-	 */
-	if (nohw) {
-		ctx->cur_qp = ctx->qp_i;
-		ctx->hw_ready = true;
-		return 0;
-	}
 	if (hc_running) {
 		amvenc_stop();
 		hc_running = false;
@@ -807,11 +832,6 @@ static void hc_work(struct work_struct *w)
 	 */
 	if (!out) {
 		ret = -EFAULT;	/* DMABUF 进来的没有内核映射 */
-		goto done;
-	}
-	if (nohw) {		/* 没硬件：空帧，只为把 V4L2 的收尾路径走完 */
-		vb2_set_plane_payload(&dst->vb2_buf, 0, 0);
-		ret = 0;
 		goto done;
 	}
 	if (idr) {
@@ -1418,6 +1438,22 @@ static int hc_v4l2_register(struct device *dev)
 }
 
 /* ------------------------------------------------------------------ */
+/* nohw 时四个窗口都落在 RAM 上，其余代码照常读写，不用到处 if。 */
+static void __iomem *hc_map(phys_addr_t base, u32 size)
+{
+	return nohw ? (void __iomem *)vzalloc(size) : ioremap(base, size);
+}
+
+static void hc_unmap(void __iomem *p)
+{
+	if (!p)
+		return;
+	if (nohw)
+		vfree((void *)p);
+	else
+		iounmap(p);
+}
+
 static void hc_teardown(void)
 {
 	if (video_is_registered(&hc_vdev))
@@ -1449,14 +1485,10 @@ static void hc_teardown(void)
 		platform_device_unregister(hc_pdev);
 		hc_pdev = NULL;
 	}
-	if (hc_ao)
-		iounmap(hc_ao);
-	if (hc_hhi)
-		iounmap(hc_hhi);
-	if (hc_dmc)
-		iounmap(hc_dmc);
-	if (hc_dos)
-		iounmap(hc_dos);
+	hc_unmap(hc_ao);
+	hc_unmap(hc_hhi);
+	hc_unmap(hc_dmc);
+	hc_unmap(hc_dos);
 	hc_ao = hc_hhi = NULL;
 	hc_dmc = hc_dos = NULL;
 	if (hc_logf) {
@@ -1483,12 +1515,14 @@ static int __init hc_init(void)
 
 	/* DOS 窗口和 meson-vdec 是同一块，所以不能 request_mem_region。
 	 * 我们只碰 hcodec 的子块，见 docs/hcodec-encoder-plan.md 阶段 1 第 5 点。
+	 * nohw 时换成 RAM：QEMU virt 上这几段物理地址根本不存在，碰一下就是同步
+	 * 外部 abort（实测 hc_poweron+0x20 当场 oops）。
 	 */
-	hc_mark("1a ioremap");
-	hc_dos = ioremap(HC_DOS_BASE, HC_DOS_SIZE);
-	hc_dmc = ioremap(HC_DMC_BASE, HC_DMC_SIZE);
-	hc_hhi = ioremap(HC_HHI_BASE, HC_HHI_SIZE);
-	hc_ao = ioremap(HC_AO_BASE, HC_AO_SIZE);
+	hc_mark(nohw ? "1a vzalloc（假硬件）" : "1a ioremap");
+	hc_dos = hc_map(HC_DOS_BASE, HC_DOS_SIZE);
+	hc_dmc = hc_map(HC_DMC_BASE, HC_DMC_SIZE);
+	hc_hhi = hc_map(HC_HHI_BASE, HC_HHI_SIZE);
+	hc_ao = hc_map(HC_AO_BASE, HC_AO_SIZE);
 	if (!hc_dos || !hc_dmc || !hc_hhi || !hc_ao) {
 		ret = -ENOMEM;
 		goto out;

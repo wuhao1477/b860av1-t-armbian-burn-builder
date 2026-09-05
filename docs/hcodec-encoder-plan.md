@@ -134,8 +134,14 @@ CMA 里的旧数据，ucode 的 RD 决策会读它们。解码画面照样对得
 ### QEMU 上把 V4L2 那一半跑完了（2026-09-05，也不需要板子）
 
 [`scripts/hcodec-v4l2-qemu.sh`](../scripts/hcodec-v4l2-qemu.sh)：拿同一个冻结包里的真
-`Image` 在 QEMU virt / cortex-a53 上起 initramfs，`nohw=1` 加载模块（一个 HCODEC
-寄存器都不碰），然后 `v4l2-ctl` + `v4l2-compliance`。
+`Image` 在 QEMU virt / cortex-a53 上起 initramfs，`nohw=1` 加载模块，然后 `v4l2-ctl` +
+`v4l2-compliance`，再把 IDR/P/P 三帧真的推过 `/dev/video0`。
+
+`nohw=1` 不是「什么都不碰」：四个 MMIO 窗口换成 `vzalloc` 的 RAM，**厂商那整套序列
+照跑**（`amvenc_reset` → `avc_canvas_init` → `avc_init_encoder` → `avc_prot_init` →
+dblk/ref/assit → `amvenc_start`），三个轮询点（IMEM DMA 忙位、`ENCODER_STATUS`）由模块
+替硬件应答。于是**每帧写进寄存器的编码参数可以读回来断言** —— 这些正是 ucode 真正读的
+东西。
 
 ```
 HCV4L2_INSMOD ok            /dev/video0 出来了
@@ -143,7 +149,16 @@ Detected Stateful Encoder
 1920x1080 NV12 → 1920/1088                      圆到整 MB
 1281x721  YU12 → 1296/736  bpl 1344  size 1483776   MFDIN 跨度对齐 64
 Total for meson-hcodec device /dev/video0: 48, Succeeded: 48, Failed: 0, Warnings: 0
+nohw#1 idr=1 idr_pic_id=0 frame_num=0 poc=0 rec=e6e5e4 anc=e9e8e7 qp=26 qtab=1a1a1a1a
+nohw#2 idr=0 idr_pic_id=1 frame_num=1 poc=2 rec=e9e8e7 anc=e6e5e4 qp=27 qtab=1b1b1b1b
+nohw#3 idr=0 idr_pic_id=1 frame_num=2 poc=4 rec=e6e5e4 anc=e9e8e7 qp=26 qtab=1a1a1a1a
 ```
+
+三行 `nohw#` 是脚本硬断言的，逐项都对得上厂商源码：`frame_num` 0/1/2 与 POC 0/2/4
+递增（IDR 那帧写 0），刚写完的 dblk 缓冲区变成下一帧的参考帧（`rec`↔`anc` 互换，
+基址是厂商的 `AMVENC_CANVAS_INDEX = 0xE4`），QP 表尾字等于本帧 QP 重复四次 ——
+`qp=27 → 1b1b1b1b` 顺带证明 `hc_rate` 的码率反馈真的传到了表里（GXBB+ 的 FULL ucode
+只认表里的值）。**所以多帧/P 帧的寄存器编程不再是「只读过代码」。**
 
 **这一趟抓出 6 个真 bug**，其中第 1 个会让板子每次 insmod 都挂：
 
@@ -156,8 +171,15 @@ Total for meson-hcodec device /dev/video0: 48, Succeeded: 48, Failed: 0, Warning
 | 5 | 找不到 `V4L2_CID_MIN_BUFFERS_FOR_OUTPUT` | 控件漏了 |
 | 6 | `stage=1` 时没有 `/dev/videoN` | 早退路径没走到注册；改成 `goto reg` |
 
-验不上的只有 ucode 和真编码：HCODEC 的 MMIO 在 QEMU 里不存在，碰一下就是同步外部
-abort（`hc_poweron+0x20` 实测），所以才有 `nohw=1` 这个参数。
+验不上的只有 ucode 和真码流：HCODEC 的 MMIO 在 QEMU 里不存在，碰一下就是同步外部
+abort（`hc_poweron+0x20` 实测），也没有 AMRISC 去执行厂商序列，所以 `VLC_TOTAL_BYTES`
+恒为 0。**真码流仍然只能实机验**（阶段 1b 的最后一格）。
+
+另外记一笔踩了三轮的坑：`v4l2-ctl` 每帧从文件读的字节数是 **mmap 缓冲区长度**
+（`read_one_frame` 用 `q.g_length(j)`），而 vb2 会把它 `PAGE_ALIGN`。640x480 NV12 =
+460800 不是页整数倍，读第二帧就跨过文件尾，只喂得进一帧；改成 640x512（491520 = 120
+页）才对得齐。缓冲区数也要显式 `--stream-out-mmap 4`，否则 v4l2-ctl 拿
+`MIN_BUFFERS_FOR_OUTPUT`（我们报 1）当数量，同样只有一帧。
 
 复现命令见 [README](../tools/hcodec-mod/README.md) 的「不用板子也能编」。
 

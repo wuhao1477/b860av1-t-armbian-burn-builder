@@ -70,3 +70,33 @@ test('MIN_BUFFERS_FOR_OUTPUT 控件不能少', () => {
   // v4l2-test-controls.cpp:1182 对 stateful 编码器强制要求。
   assert.match(src, /V4L2_CID_MIN_BUFFERS_FOR_OUTPUT, 1, 32, 1, 1\)/);
 });
+
+const qemu = fs.readFileSync(new URL('../scripts/hcodec-v4l2-qemu.sh', import.meta.url), 'utf8');
+
+test('nohw 是 RAM 假硬件，不是「什么都不碰」', () => {
+  // 四个窗口换成 vzalloc，厂商那整套寄存器序列照跑，QEMU 上才能断言每帧编程。
+  assert.match(src, /nohw \? \(void __iomem \*\)vzalloc\(size\) : ioremap\(base, size\)/);
+  // hw_setup / hc_work 里不能再有 nohw 早退，否则又回到「帧根本没编」。
+  const setup = src.slice(src.indexOf('static int hc_hw_setup('), src.indexOf('static void hc_return_bufs('));
+  for (const chunk of [setup, hcWork]) assert.doesNotMatch(chunk, /if \(nohw\)\s*\{/);
+});
+
+test('nohw 的逐帧日志字段和 QEMU 断言对得上', () => {
+  // 脚本 grep 的是这一行；改了格式就等于把三帧断言悄悄废掉。
+  assert.match(src, /nohw#%u idr=%d idr_pic_id=%u frame_num=%u poc=%u rec=%06x anc=%06x qp=%u qtab=%08x/);
+  for (const want of ['nohw#1 idr=1 idr_pic_id=0 frame_num=0 poc=0 rec=e6e5e4 anc=e9e8e7',
+                      'nohw#2 idr=0 idr_pic_id=1 frame_num=1 poc=2 rec=e9e8e7 anc=e6e5e4',
+                      'nohw#3 idr=0 idr_pic_id=1 frame_num=2 poc=4 rec=e6e5e4 anc=e9e8e7'])
+    assert.ok(qemu.includes(want), `脚本里缺断言：${want}`);
+});
+
+test('三帧测试的分辨率必须页对齐（v4l2-ctl 按 g_length 读文件）', () => {
+  // read_one_frame 每帧读 mmap 缓冲区长度，vb2 会 PAGE_ALIGN 它。sizeimage 不是
+  // 4096 的整数倍时读第二帧就跨过文件尾，只喂得进一帧（640x480 实测踩过）。
+  const sets = [...qemu.matchAll(/--set-fmt-video-out=width=(\d+),height=(\d+),pixelformat=NV12/g)];
+  const [, w, h] = sets.at(-1); // 三帧那次是最后一个 set-fmt
+  const sizeimage = +w * +h * 3 / 2;
+  assert.equal(sizeimage % 4096, 0, `${w}x${h} NV12 的 sizeimage ${sizeimage} 不是页整数倍`);
+  assert.ok(qemu.includes(`bs=${sizeimage} count=`), `dd 的 bs 要等于 sizeimage ${sizeimage}`);
+  assert.match(qemu, /--stream-out-mmap 4 --stream-count 3/); // 不给数量就只有 1 个缓冲区
+});

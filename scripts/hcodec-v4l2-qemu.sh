@@ -1,15 +1,17 @@
 #!/usr/bin/env bash
 # SPDX-License-Identifier: MIT
 #
-# 不用板子验证 meson_hcodec 的 V4L2 那一半：拿冻结内核包里的真 Image 在 QEMU
-# virt 上起一个 initramfs，insmod 模块（stage=1，只映射不碰硬件），然后跑
-# v4l2-ctl / v4l2-compliance。
+# 不用板子验证 meson_hcodec：拿冻结内核包里的真 Image 在 QEMU virt 上起一个
+# initramfs，insmod 模块（nohw=1，四个 MMIO 窗口换成 RAM），然后跑 v4l2-ctl /
+# v4l2-compliance，并把 IDR/P/P 三帧真的推过 /dev/video0。
 #
 # 能验的：模块能不能加载、/dev/videoN 出不出来、格式协商（16 对齐、MFDIN 跨度）、
-# 控件范围、缓冲区分配、ioctl 状态机。
-# 验不上的：ucode 和真编码 —— HCODEC 的 MMIO 在 QEMU 里根本不存在，碰一下就是
-# 同步外部 abort，所以模块要带 nohw=1 加载（编出来的帧长度为 0）。
-# 真编码只能实机跑（见 docs/hcodec-encoder-plan.md）。
+# 控件范围、缓冲区分配、ioctl 状态机，以及**每帧写进寄存器的编码参数**——
+# nohw 下 dos 窗口是 RAM，所以编完能把 ucode 本该读到的值读回来断言：
+# frame_num / POC 递增、dblk↔ref canvas 互换、QP 表按帧重填。
+# 验不上的：ucode 和真码流 —— HCODEC 的 MMIO 在 QEMU 里根本不存在（碰一下就是
+# 同步外部 abort），没有 AMRISC 去执行序列，所以帧长度恒为 0。
+# 真码流只能实机跑（见 docs/hcodec-encoder-plan.md）。
 #
 #   scripts/hcodec-v4l2-qemu.sh [工作目录]
 set -Eeuo pipefail
@@ -43,8 +45,11 @@ if [[ ! -f "$work/boot/vmlinuz-$release" ]]; then
   tar xzf "$work/5.10.268/header-$release.tar.gz" -C "$work/hdr"
 fi
 
-# 2) 厂商 GPL 切片 + 本仓库的模块源码，拼到一个目录
-[[ -f "$work/build/meson_hcodec.c" ]] || "$root/tools/hcenc/fetch-vendor.sh" "$work/build"
+# 2) 厂商 GPL 切片（下载一次就缓存）+ 本仓库的模块源码（每次都覆盖，不然改了
+#    源码却编的是上一轮的）
+[[ -f "$work/build/venc.c" ]] || "$root/tools/hcenc/fetch-vendor.sh" "$work/build"
+cp "$root/tools/hcenc/"{hcenc.c,kshim.h,venc_defs.h} "$work/build/"
+cp "$root/tools/hcodec-mod/"{meson_hcodec.c,kmshim.h,Makefile} "$work/build/"
 
 # 3) 剩下的全在 arm64 容器里做：编模块 → 造 initramfs → 跑 QEMU
 #    头文件树自带的 fixdep/modpost 是 aarch64 ELF，所以容器必须是 arm64，
@@ -62,7 +67,7 @@ grep -E 'warning|error' /tmp/make.log && { echo '编译有告警/报错'; exit 1
 modinfo /build/meson_hcodec.ko | grep -E '^(vermagic|depends)'
 
 ir=/tmp/ir
-mkdir -p "$ir"/{bin,sbin,proc,sys,dev,lib,usr/bin,usr/sbin}
+mkdir -p "$ir"/{bin,sbin,proc,sys,dev,tmp,lib,usr/bin,usr/sbin}
 cp /bin/busybox "$ir/bin/"
 ln -sf busybox "$ir/bin/sh"
 cp /build/meson_hcodec.ko "$ir/lib/"
@@ -99,6 +104,20 @@ v4l2-ctl -d /dev/video0 --set-fmt-video-out=width=1920,height=1080,pixelformat=N
 echo '---- 1281x721 应该被圆到 1296x736，YUV420 跨度对齐 64 ----'
 v4l2-ctl -d /dev/video0 --set-fmt-video-out=width=1281,height=721,pixelformat=YU12 \
   --get-fmt-video-out 2>&1
+echo '---- IDR/P/P 三帧过一遍真路径（640x512 NV12，gop 默认 30）----'
+v4l2-ctl -d /dev/video0 --set-fmt-video-out=width=640,height=512,pixelformat=NV12 \
+  --get-fmt-video-out 2>&1
+# 分辨率取 640x512 是有讲究的：v4l2-ctl 每帧从文件读的是 **mmap 缓冲区长度**
+# （read_one_frame 用 q.g_length(j)，不是 sizeimage），而 vb2 会把长度 PAGE_ALIGN。
+# 640x480 NV12 = 460800 不是页整数倍，读第二帧就跨过文件尾了；640x512 = 491520
+# = 120 页整整好。--stream-out-mmap 也要显式给 4：不给的话 v4l2-ctl 拿
+# MIN_BUFFERS_FOR_OUTPUT（我们报 1）当缓冲区数，只喂得进一帧。
+# 于是 STREAMON 之前 3 帧全进队列（第 3 帧上 --stream-count 归零 → QUEUE_STOPPED），
+# v4l2-ctl 随即发 ENC_CMD_STOP，三帧一起 drain。
+dd if=/dev/zero of=/tmp/in.nv12 bs=491520 count=6
+v4l2-ctl -d /dev/video0 --stream-mmap --stream-out-mmap 4 --stream-count 3 \
+  --stream-from /tmp/in.nv12 --stream-to /tmp/out.h264 2>&1
+ls -l /tmp/out.h264 2>&1
 echo '---- v4l2-compliance ----'
 v4l2-compliance -d /dev/video0 2>&1
 echo "HCV4L2_DONE"
@@ -134,4 +153,30 @@ else
   grep -E '^\s*(fail|Total for)|fail:' "$log" >&2 || true
   exit 1
 fi
-echo '==> V4L2 那一半在 QEMU 上全过'
+
+# IDR/P/P 的每帧寄存器编程。这几个值是 ucode 真正读的东西：frame_num 和 POC 必须
+# 按 0/0 → 1/2 → 2/4 递增（IDR 自己那帧写 0），刚写好的 dblk 缓冲区要变成下一帧的
+# 参考帧（rec↔anc 互换），canvas 基址是厂商的 0xE4。
+want1='nohw#1 idr=1 idr_pic_id=0 frame_num=0 poc=0 rec=e6e5e4 anc=e9e8e7'
+want2='nohw#2 idr=0 idr_pic_id=1 frame_num=1 poc=2 rec=e9e8e7 anc=e6e5e4'
+want3='nohw#3 idr=0 idr_pic_id=1 frame_num=2 poc=4 rec=e6e5e4 anc=e9e8e7'
+for want in "$want1" "$want2" "$want3"; do
+  grep -q "$want" "$log" || {
+    echo "==> 帧序列不对，缺：$want" >&2
+    grep -E 'nohw#' "$log" >&2 || echo '（一行 nohw# 都没有：三帧根本没编）' >&2
+    exit 1
+  }
+done
+grep -E 'nohw#' "$log"
+
+# QP 表是每帧重填的（GXBB+ 的 FULL ucode 只认表里的值，不认 avc_prot_init 的
+# quant 参数），所以表尾那个字必须等于本帧 QP 重复四次。
+grep -oE 'nohw#[0-9]+ .*qp=[0-9]+ qtab=[0-9a-f]{8}' "$log" | while read -r line; do
+  q=${line##*qp=}; q=${q%% *}
+  want=$(printf '%02x%02x%02x%02x' "$q" "$q" "$q" "$q")
+  [[ ${line##*qtab=} == "$want" ]] || {
+    echo "==> QP 表没跟上：qp=$q 期望 qtab=$want，实际 ${line##*qtab=}" >&2
+    exit 1
+  }
+done || exit 1
+echo '==> V4L2 协议 + IDR/P/P 每帧寄存器编程，在 QEMU 上全过（无真码流：没有 ucode）'

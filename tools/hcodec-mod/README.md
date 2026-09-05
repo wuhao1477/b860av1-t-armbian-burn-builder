@@ -43,9 +43,12 @@ scripts/hcodec-v4l2-qemu.sh [工作目录]     # 默认 /tmp/hcqemu
 ```
 
 上面那套编译 + 在 QEMU virt / cortex-a53 上拿同一个真 `Image` 起 initramfs，
-`nohw=1` 加载模块，跑 `v4l2-ctl` 和 `v4l2-compliance`。全过的标志是
-`Failed: 0`。验不上 ucode 和真编码 —— HCODEC 的 MMIO 在 QEMU 里不存在，
-碰一下就是同步外部 abort，`nohw=1` 就是为了绕开它。
+`nohw=1` 加载模块，跑 `v4l2-ctl` 和 `v4l2-compliance`，并把 IDR/P/P 三帧真的推过
+`/dev/video0`。全过的标志是 `Failed: 0` 加三行 `nohw#`。`nohw=1` 时四个 MMIO 窗口
+换成 `vzalloc` 的 RAM，**厂商那整套寄存器序列照跑**，所以能把 ucode 本该读到的值
+读回来断言（`frame_num`/POC 递增、dblk↔ref canvas 互换、QP 表按帧重填）。
+验不上的只有 ucode 和真码流 —— HCODEC 的 MMIO 在 QEMU 里不存在（碰一下就是同步
+外部 abort），没有 AMRISC 去执行序列，所以帧长度恒为 0。
 
 ## 编译并加载
 
@@ -73,7 +76,7 @@ ssh root@<board> '
 | `stage` | 9 | 只跑到第 N 步：1 映射 2 上电 3 scratch 4 ucode 5 起 AMRISC 6 编一帧 |
 | `marklog` | `/root/hcodec-stage.log` | 每步落盘 + fsync 一行；硬挂重启后最后一行就是挂住的那步 |
 | `poweron` | 1 | 自己做上电序列 |
-| `nohw` | 0 | 一个 HCODEC 寄存器都不碰，编出来的帧长度为 0（QEMU 上验 V4L2 协议用） |
+| `nohw` | 0 | 假硬件：4 个 MMIO 窗口换成 RAM，轮询点自己应答，码流长度为 0（QEMU 上验寄存器编程用） |
 | `blanket_reset` | 0 | 用厂商的 `DOS_SW_RESET1=0xffffffff`（会打断正在解码的 vdec） |
 
 自测码流：`cat /sys/kernel/debug/meson-hcodec/out.h264 > /tmp/out.h264`。
