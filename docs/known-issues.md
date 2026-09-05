@@ -361,6 +361,11 @@ expand-rootfs）在 `build-49.1` 上都按预期起来了。
 expand 链接又活着；两个服务都靠 drop-in 起来了，`swapon --show` 是 `/dev/zram0 400.3M`，
 根分区首次开机自己撑到 5.1G。所以这是稳定可复现的目录级现象，不是偶发。
 
+**`build-50.1` 第四次复现（2026-09-05）。** 换了一份新镜像（多三个微码文件）结果不变：
+`sysinit.target.wants/armbian-zram-config.service` 又没了，同一目录下同一毫秒写的
+`sysinit.target.d/10-b860-armbian-zram-config.conf` 在，zram 照样 400.3M 起来。
+四次都指向同一个结论：**符号链接不可靠，drop-in 常规文件可靠。**
+
 ## 9. 内核线 2026-12-31 EOL，且没有保住 WiFi 的升级路线
 
 **已知、无解，只能等移植。** 当前钉死在 5.10.268（[`frozen-inputs.md`](frozen-inputs.md)）。
@@ -383,7 +388,6 @@ ophub 的 `kernel-config/release/stable/config-*` 里 `CONFIG_RTL8189FS=m` 只�
 **H.264 已修复并实机验证（2026-09-05）。** 上游 Armbian 镜像里 `/lib/firmware/meson/`
 **整个目录都不存在**，而 `meson-vdec` 是在 `VIDIOC_STREAMON` 那一刻才
 `request_firmware` —— 所以：
-
 ```
 /dev/video0                      在（meson-video-decoder，platform:meson-vdec）
 枚举 OUT 格式                     VP90 / H264 / MPG1 / MPG2，CAP 是 NM12
@@ -411,16 +415,35 @@ dmesg                            Direct firmware load for meson/vdec/gxl_h264.bi
 微码不入库：仓库只放源码（CI 的 `inspectTrackedFiles` 盯着），而且这几个 `.bin` 是
 Amlogic 的可再分发二进制，不是 MIT。
 
+**`build-50.1` 刷机复验通过（2026-09-05）**，这次是「从包里出来的」而不是手工放的：
+
+```
+是新镜像            up 5 min；SSH host key 变了；上一刷 apt 装的 v4l-utils 不在了
+微码                三个 .bin 的 sha256 与 board.json 逐字节一致
+dmesg               meson 固件错误 0 条
+解码                29,491,200 字节 = 20 × 1,474,560，第 0 帧 PNG 就是 testsrc 图案
+其余六项            root/password SSH、zsh、根分区 5.1G、zram 400.3M、无首登标记、
+                    wait-online disabled；首刷含 resize 30.7 s 进系统
+```
+
+解码时 `dmesg` 会刷一串 `Buffer N done but can't match offset (…)`，但帧数和字节数
+都对、画面也对 —— 那是 `meson-vdec` 匹配时间戳的噪音，**不要和下面 MPEG-2 那条
+`doesn't exist in m2m_ctx` 搞混**，后者是真的没出帧。
+
 复现（板上，`v4l-utils`）：
 
 ```bash
-# 单个 IDR 帧不够，只会出 SOURCE CHANGE EVENT + 0 字节文件，要多帧片段
+# 单个 IDR 帧不够，只会出 SOURCE CHANGE EVENT + 0 字节文件，要多帧片段。
+# 别加 -bsf:v h264_mp4toannexb：h264 muxer 出来已经是 Annex-B，加了会写出 0 字节。
 ffmpeg -f lavfi -i testsrc=size=1280x720:rate=25:duration=2 \
-  -c:v libx264 -profile:v baseline -bsf:v h264_mp4toannexb -f h264 test720p.h264
+  -c:v libx264 -profile:v baseline -pix_fmt yuv420p -g 25 -f h264 test720p.h264
 v4l2-ctl -d /dev/video0 \
   --set-fmt-video-out=width=1280,height=720,pixelformat=H264 \
   --stream-out-mmap --stream-from=test720p.h264 \
   --stream-mmap --stream-to=dec.nm12 --stream-count=20
+# 看图：单帧 1280×768（720 按 64 对齐），底部 48 行绿边就是那圈对齐填充
+head -c 1474560 dec.nm12 > frame0.nm12
+ffmpeg -f rawvideo -pix_fmt nv12 -s 1280x768 -i frame0.nm12 -frames:v 1 frame0.png
 ```
 
 **还开着的部分：MPEG-2 解不出来，但不是微码的事。** `gxl_mpeg12.bin` 装上之后
