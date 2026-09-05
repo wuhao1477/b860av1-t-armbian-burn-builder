@@ -10,6 +10,11 @@ M2M 编码器。对应 [`../../docs/hcodec-encoder-plan.md`](../../docs/hcodec-e
 - **1b 已编译通过（2026-09-05）**，等实机验证：`vermagic 5.10.268-ophub SMP
   preempt mod_unload aarch64`、`depends v4l2-mem2mem,videobuf2-dma-contig`，
   `W=1` 零告警。`ffmpeg -c:v h264_v4l2m2m` / `gst v4l2h264enc` 零补丁能用。
+- **1b 的 V4L2 那一半在 QEMU 上全过（2026-09-05）**：`v4l2-compliance` 48/48、
+  0 failed 0 warnings，`Detected Stateful Encoder`。这一趟抓出 6 个真 bug，
+  其中「`v4l2_device_register` 空指针」会让板子每次 insmod 都挂 ——
+  跑法见下面的「不用板子也能验」，明细见
+  [`../../docs/hcodec-encoder-plan.md`](../../docs/hcodec-encoder-plan.md)。
 
 ## 不用板子也能编
 
@@ -30,6 +35,17 @@ docker run --rm --platform linux/arm64 -v /tmp/hdr:/hdr -v /tmp/hcbuild:/build \
 
 `debian:trixie` 的 gcc 是 14.2.0，和板上一致；vermagic 不编码 gcc 版本，
 MODVERSIONS 和签名都没开，所以出来的 `.ko` 直接 `insmod` 就行。
+
+## 不用板子也能验
+
+```bash
+scripts/hcodec-v4l2-qemu.sh [工作目录]     # 默认 /tmp/hcqemu
+```
+
+上面那套编译 + 在 QEMU virt / cortex-a53 上拿同一个真 `Image` 起 initramfs，
+`nohw=1` 加载模块，跑 `v4l2-ctl` 和 `v4l2-compliance`。全过的标志是
+`Failed: 0`。验不上 ucode 和真编码 —— HCODEC 的 MMIO 在 QEMU 里不存在，
+碰一下就是同步外部 abort，`nohw=1` 就是为了绕开它。
 
 ## 编译并加载
 
@@ -57,6 +73,7 @@ ssh root@<board> '
 | `stage` | 9 | 只跑到第 N 步：1 映射 2 上电 3 scratch 4 ucode 5 起 AMRISC 6 编一帧 |
 | `marklog` | `/root/hcodec-stage.log` | 每步落盘 + fsync 一行；硬挂重启后最后一行就是挂住的那步 |
 | `poweron` | 1 | 自己做上电序列 |
+| `nohw` | 0 | 一个 HCODEC 寄存器都不碰，编出来的帧长度为 0（QEMU 上验 V4L2 协议用） |
 | `blanket_reset` | 0 | 用厂商的 `DOS_SW_RESET1=0xffffffff`（会打断正在解码的 vdec） |
 
 自测码流：`cat /sys/kernel/debug/meson-hcodec/out.h264 > /tmp/out.h264`。

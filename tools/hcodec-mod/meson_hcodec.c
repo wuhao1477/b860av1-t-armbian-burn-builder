@@ -48,6 +48,7 @@ static bool blanket_reset;
 static unsigned int stage = 9;
 static bool poweron = true;
 static char *marklog = "/root/hcodec-stage.log";
+static bool nohw;
 module_param(width, uint, 0444);
 MODULE_PARM_DESC(width, "自测帧宽度（默认 1280）");
 module_param(height, uint, 0444);
@@ -69,6 +70,9 @@ MODULE_PARM_DESC(marklog,
 		 "每步落盘一行的进度日志，硬挂之后最后一行就是挂住的那步（空串关掉）");
 module_param_named(log_level, hc_log_level, uint, 0644);
 MODULE_PARM_DESC(log_level, "厂商日志阈值：0 全开 3 只报错（默认 3）");
+module_param(nohw, bool, 0444);
+MODULE_PARM_DESC(nohw,
+		 "一个 HCODEC 寄存器都不碰，编出来的帧长度为 0；QEMU 上验 V4L2 协议用");
 
 /* 厂商头 + 切片，由 fetch-vendor.sh 放到同一个目录里 */
 #include "hcodec_regs.h"
@@ -642,6 +646,10 @@ struct hc_ctx {
 	u32 fps_num, fps_den;
 	u32 gop, bitrate, qp_i, qp_p, qp_min, qp_max;
 	u32 cur_qp, since_idr;
+	/* ucode 不做色彩变换、SPS 里也没有 VUI，所以 colorimetry 只是元数据：
+	 * 原样收下、原样带到 CAPTURE（v4l2-compliance 强制要求这个 round-trip）。
+	 */
+	u8 colorspace, ycbcr_enc, quantization, xfer_func;
 	bool force_idr, hw_ready;
 };
 
@@ -649,7 +657,7 @@ static struct v4l2_device hc_v4l2;
 static struct v4l2_m2m_dev *hc_m2m;
 static struct workqueue_struct *hc_workq;
 static DEFINE_MUTEX(hc_lock);
-static bool hc_ctx_busy;
+static struct hc_ctx *hc_streamer;	/* 同一时刻只准一个 ctx 在编 */
 
 static const u32 hc_out_fourcc[] = {
 	V4L2_PIX_FMT_NV12,
@@ -683,8 +691,10 @@ static void hc_fmt_out(struct hc_ctx *ctx, struct v4l2_pix_format *pix)
 	pix->field = V4L2_FIELD_NONE;
 	pix->bytesperline = ctx->bytesperline;
 	pix->sizeimage = ctx->sizeimage;
-	pix->colorspace = V4L2_COLORSPACE_REC709;
-	pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
+	pix->colorspace = ctx->colorspace;
+	pix->ycbcr_enc = ctx->ycbcr_enc;
+	pix->quantization = ctx->quantization;
+	pix->xfer_func = ctx->xfer_func;
 }
 
 static void hc_fmt_cap(struct hc_ctx *ctx, struct v4l2_pix_format *pix)
@@ -695,8 +705,16 @@ static void hc_fmt_cap(struct hc_ctx *ctx, struct v4l2_pix_format *pix)
 	pix->field = V4L2_FIELD_NONE;
 	pix->bytesperline = 0;
 	pix->sizeimage = ctx->bs_size;
-	pix->colorspace = V4L2_COLORSPACE_REC709;
-	pix->quantization = V4L2_QUANTIZATION_LIM_RANGE;
+	pix->colorspace = ctx->colorspace;
+	pix->ycbcr_enc = ctx->ycbcr_enc;
+	pix->quantization = ctx->quantization;
+	pix->xfer_func = ctx->xfer_func;
+}
+
+/* v4l2-compliance 会拿 0xff 填满整个结构体来试 TRY_FMT，所以越界值一律退回默认。 */
+static u8 hc_colorimetry(u32 want, u32 max, u8 def)
+{
+	return want ? (want <= max ? want : def) : def;
 }
 
 static inline struct hc_ctx *hc_fh(struct file *f)
@@ -712,6 +730,14 @@ static int hc_hw_setup(struct hc_ctx *ctx)
 
 	if (ctx->hw_ready)
 		return 0;
+	/* nohw：QEMU virt 上 HCODEC 的 MMIO 根本不存在，读一下就是同步外部 abort
+	 * （实测 hc_poweron+0x20 直接 oops）。这条路只让 V4L2 状态机跑起来。
+	 */
+	if (nohw) {
+		ctx->cur_qp = ctx->qp_i;
+		ctx->hw_ready = true;
+		return 0;
+	}
 	if (hc_running) {
 		amvenc_stop();
 		hc_running = false;
@@ -781,6 +807,11 @@ static void hc_work(struct work_struct *w)
 	 */
 	if (!out) {
 		ret = -EFAULT;	/* DMABUF 进来的没有内核映射 */
+		goto done;
+	}
+	if (nohw) {		/* 没硬件：空帧，只为把 V4L2 的收尾路径走完 */
+		vb2_set_plane_payload(&dst->vb2_buf, 0, 0);
+		ret = 0;
 		goto done;
 	}
 	if (idr) {
@@ -882,12 +913,21 @@ static void hc_return_bufs(struct hc_ctx *ctx, struct vb2_queue *q,
 static int hc_start_streaming(struct vb2_queue *q, unsigned int count)
 {
 	struct hc_ctx *ctx = vb2_get_drv_priv(q);
-	int ret = hc_hw_setup(ctx);
+	int ret;
 
+	/* 硬件只有一份参考帧和一套 canvas，所以只准一个 ctx 在编。这道闸设在
+	 * STREAMON 而不是 open()：gstreamer 探测设备、v4l2-ctl 查控件都得能进来，
+	 * 拦在 open() 上 v4l2-compliance 也会判「second open」不合规。
+	 */
+	if (hc_streamer && hc_streamer != ctx)
+		ret = -EBUSY;
+	else
+		ret = hc_hw_setup(ctx);
 	if (ret) {
 		hc_return_bufs(ctx, q, VB2_BUF_STATE_QUEUED);
 		return ret;
 	}
+	hc_streamer = ctx;
 	ctx->since_idr = 0;
 	ctx->force_idr = true;
 	v4l2_m2m_update_start_streaming_state(ctx->fh.m2m_ctx, q);
@@ -902,6 +942,11 @@ static void hc_stop_streaming(struct vb2_queue *q)
 	flush_workqueue(hc_workq);
 	hc_return_bufs(ctx, q, VB2_BUF_STATE_ERROR);
 	v4l2_m2m_update_stop_streaming_state(ctx->fh.m2m_ctx, q);
+	/* 让位给别的 ctx；hw_ready 一起清掉，回来时重新 wq_init + 装 ucode。 */
+	if (hc_streamer == ctx) {
+		hc_streamer = NULL;
+		ctx->hw_ready = false;
+	}
 	if (V4L2_TYPE_IS_OUTPUT(q->type) &&
 	    v4l2_m2m_has_stopped(ctx->fh.m2m_ctx))
 		v4l2_event_queue_fh(&ctx->fh, &eos);
@@ -981,6 +1026,35 @@ static int hc_enum_fmt_cap(struct file *f, void *p, struct v4l2_fmtdesc *fd)
 	return 0;
 }
 
+/* stateful 编码器必须实现这个，少了 v4l2-compliance 会在 ENUM_FMT 那一步整段
+ * 判失败（v4l2-test-formats.cpp:304 的 fail_on_test(codec_mask & STATEFUL_ENCODER)），
+ * 后面 G/TRY/S_FMT 的「H264 not reported by ENUM_FMT」全是它的连带。
+ * 步长 16 —— ucode 按整 MB 编。
+ */
+static int hc_enum_framesizes(struct file *f, void *p,
+			      struct v4l2_frmsizeenum *fs)
+{
+	unsigned int i;
+
+	if (fs->index)
+		return -EINVAL;
+	if (fs->pixel_format != V4L2_PIX_FMT_H264) {
+		for (i = 0; i < ARRAY_SIZE(hc_out_fourcc); i++)
+			if (hc_out_fourcc[i] == fs->pixel_format)
+				break;
+		if (i == ARRAY_SIZE(hc_out_fourcc))
+			return -EINVAL;
+	}
+	fs->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+	fs->stepwise.min_width = 16;
+	fs->stepwise.max_width = 1920;
+	fs->stepwise.step_width = 16;
+	fs->stepwise.min_height = 16;
+	fs->stepwise.max_height = 1088;
+	fs->stepwise.step_height = 16;
+	return 0;
+}
+
 static int hc_g_fmt_out(struct file *f, void *p, struct v4l2_format *fmt)
 {
 	hc_fmt_out(hc_fh(f), &fmt->fmt.pix);
@@ -996,6 +1070,7 @@ static int hc_g_fmt_cap(struct file *f, void *p, struct v4l2_format *fmt)
 static int hc_try_fmt_out(struct file *f, void *p, struct v4l2_format *fmt)
 {
 	struct v4l2_pix_format *pix = &fmt->fmt.pix;
+	struct hc_ctx *ctx = hc_fh(f);
 	struct hc_ctx probe = {};
 	int i;
 
@@ -1004,6 +1079,19 @@ static int hc_try_fmt_out(struct file *f, void *p, struct v4l2_format *fmt)
 			break;
 	probe.fourcc = i < ARRAY_SIZE(hc_out_fourcc) ? pix->pixelformat :
 						       V4L2_PIX_FMT_NV12;
+	/* OUTPUT 是 colorimetry 的入口，用户给什么就收什么 */
+	probe.colorspace = hc_colorimetry(pix->colorspace,
+					  V4L2_COLORSPACE_DCI_P3,
+					  ctx->colorspace);
+	probe.ycbcr_enc = hc_colorimetry(pix->ycbcr_enc,
+					 V4L2_YCBCR_ENC_SMPTE240M,
+					 ctx->ycbcr_enc);
+	probe.quantization = hc_colorimetry(pix->quantization,
+					    V4L2_QUANTIZATION_LIM_RANGE,
+					    ctx->quantization);
+	probe.xfer_func = hc_colorimetry(pix->xfer_func,
+					 V4L2_XFER_FUNC_SMPTE2084,
+					 ctx->xfer_func);
 	hc_set_geom(&probe, pix->width, pix->height);
 	hc_fmt_out(&probe, pix);
 	return 0;
@@ -1012,7 +1100,15 @@ static int hc_try_fmt_out(struct file *f, void *p, struct v4l2_format *fmt)
 static int hc_try_fmt_cap(struct file *f, void *p, struct v4l2_format *fmt)
 {
 	struct v4l2_pix_format *pix = &fmt->fmt.pix;
-	struct hc_ctx probe = { .fourcc = hc_fh(f)->fourcc };
+	struct hc_ctx *ctx = hc_fh(f);
+	/* CAPTURE 的 colorimetry 跟着 OUTPUT，不接受用户改 */
+	struct hc_ctx probe = {
+		.fourcc = ctx->fourcc,
+		.colorspace = ctx->colorspace,
+		.ycbcr_enc = ctx->ycbcr_enc,
+		.quantization = ctx->quantization,
+		.xfer_func = ctx->xfer_func,
+	};
 
 	hc_set_geom(&probe, pix->width, pix->height);
 	hc_fmt_cap(&probe, pix);
@@ -1029,6 +1125,10 @@ static int hc_s_fmt_out(struct file *f, void *p, struct v4l2_format *fmt)
 	if (vb2_is_busy(v4l2_m2m_get_src_vq(ctx->fh.m2m_ctx)))
 		return -EBUSY;
 	ctx->fourcc = fmt->fmt.pix.pixelformat;
+	ctx->colorspace = fmt->fmt.pix.colorspace;
+	ctx->ycbcr_enc = fmt->fmt.pix.ycbcr_enc;
+	ctx->quantization = fmt->fmt.pix.quantization;
+	ctx->xfer_func = fmt->fmt.pix.xfer_func;
 	hc_set_geom(ctx, fmt->fmt.pix.width, fmt->fmt.pix.height);
 	hc_fmt_out(ctx, &fmt->fmt.pix);
 	return 0;
@@ -1092,6 +1192,7 @@ static const struct v4l2_ioctl_ops hc_ioctl_ops = {
 	.vidioc_querycap = hc_querycap,
 	.vidioc_enum_fmt_vid_out = hc_enum_fmt_out,
 	.vidioc_enum_fmt_vid_cap = hc_enum_fmt_cap,
+	.vidioc_enum_framesizes = hc_enum_framesizes,
 	.vidioc_g_fmt_vid_out = hc_g_fmt_out,
 	.vidioc_g_fmt_vid_cap = hc_g_fmt_cap,
 	.vidioc_try_fmt_vid_out = hc_try_fmt_out,
@@ -1183,6 +1284,11 @@ static int hc_ctrls_init(struct hc_ctx *ctx)
 			       V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME,
 			       ~BIT(V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME),
 			       V4L2_MPEG_VIDEO_HEADER_MODE_JOINED_WITH_1ST_FRAME);
+	/* 一帧一进一出，一个 OUTPUT 缓冲区就够。核心会自动置 READ_ONLY；
+	 * 少了这个控件 v4l2-compliance 判 stateful 编码器不合规
+	 * （v4l2-test-controls.cpp:1182）。
+	 */
+	v4l2_ctrl_new_std(h, NULL, V4L2_CID_MIN_BUFFERS_FOR_OUTPUT, 1, 32, 1, 1);
 	if (h->error) {
 		int ret = h->error;
 
@@ -1199,10 +1305,6 @@ static int hc_open(struct file *file)
 
 	if (mutex_lock_interruptible(&hc_lock))
 		return -ERESTARTSYS;
-	if (hc_ctx_busy) {	/* 硬件只有一份参考帧和一套 canvas */
-		ret = -EBUSY;
-		goto unlock;
-	}
 	ctx = kzalloc(sizeof(*ctx), GFP_KERNEL);
 	if (!ctx) {
 		ret = -ENOMEM;
@@ -1217,6 +1319,8 @@ static int hc_open(struct file *file)
 	ctx->qp_p = qp + 2;
 	ctx->qp_min = 16;
 	ctx->qp_max = 45;
+	ctx->colorspace = V4L2_COLORSPACE_REC709;
+	ctx->quantization = V4L2_QUANTIZATION_LIM_RANGE;
 	hc_set_geom(ctx, width, height);
 	INIT_WORK(&ctx->work, hc_work);
 	v4l2_fh_init(&ctx->fh, video_devdata(file));
@@ -1233,7 +1337,6 @@ static int hc_open(struct file *file)
 		goto free;
 	}
 	v4l2_fh_add(&ctx->fh);
-	hc_ctx_busy = true;
 	mutex_unlock(&hc_lock);
 	return 0;
 
@@ -1254,7 +1357,8 @@ static int hc_release(struct file *file)
 	v4l2_ctrl_handler_free(&ctx->ctrls);
 	mutex_lock(&hc_lock);
 	v4l2_m2m_ctx_release(ctx->fh.m2m_ctx);
-	hc_ctx_busy = false;
+	if (hc_streamer == ctx)
+		hc_streamer = NULL;
 	mutex_unlock(&hc_lock);
 	kfree(ctx);
 	return 0;
@@ -1291,6 +1395,11 @@ static int hc_v4l2_register(struct device *dev)
 	hc_workq = alloc_ordered_workqueue("meson-hcodec", WQ_MEM_RECLAIM);
 	if (!hc_workq)
 		return -ENOMEM;
+	/* 名字必须自己填：hc_pdev 是 register_simple 出来的裸平台设备，没有匹配的
+	 * driver，v4l2_device_register 补名字那条路会去读 dev->driver->name 空指针。
+	 * QEMU 上实测直接 oops（v4l2_device_register+0x60）。
+	 */
+	strscpy(hc_v4l2.name, "meson-hcodec", sizeof(hc_v4l2.name));
 	ret = v4l2_device_register(dev, &hc_v4l2);
 	if (ret)
 		return ret;
@@ -1415,7 +1524,7 @@ static int __init hc_init(void)
 
 	if (stage < 2) {
 		hc_mark("1 只做映射，停在这里");
-		return 0;
+		goto reg;
 	}
 
 	if (poweron) {
@@ -1424,7 +1533,7 @@ static int __init hc_init(void)
 	}
 	if (stage < 3) {
 		hc_mark("2 上电完，停在这里");
-		return 0;
+		goto reg;
 	}
 
 	hc_mark("3 scratch test");
@@ -1433,7 +1542,7 @@ static int __init hc_init(void)
 		goto out;
 	if (stage < 4) {
 		hc_mark("3 scratch 过了，停在这里");
-		return 0;
+		goto reg;
 	}
 
 	hc_mark("4 wq_init");
@@ -1443,7 +1552,7 @@ static int __init hc_init(void)
 		goto out;
 	if (stage < 5) {
 		hc_mark("4 ucode 装好了，停在这里");
-		return 0;
+		goto reg;
 	}
 
 	ret = hc_hw_go(dev);
@@ -1451,7 +1560,7 @@ static int __init hc_init(void)
 		goto out;
 	if (stage < 6) {
 		hc_mark("5 AMRISC 在跑，停在这里");
-		return 0;
+		goto reg;
 	}
 
 	if (selftest) {
@@ -1460,6 +1569,10 @@ static int __init hc_init(void)
 			goto out;
 	}
 
+	/* 节点总是注册：硬件是 hc_start_streaming 里懒初始化的，所以 stage=1
+	 * 也能拿到 /dev/videoN 去查 V4L2 的那一半（QEMU 里就是这么测的）。
+	 */
+reg:
 	hc_mark("7 注册 V4L2 节点");
 	ret = hc_v4l2_register(dev);
 	if (ret)

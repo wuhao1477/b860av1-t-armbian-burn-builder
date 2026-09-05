@@ -2,8 +2,8 @@
 
 **结论先行：分三阶段。阶段 0 用户态原型（**已完成，实机编出可解码的 IDR 帧**）→
 阶段 1a 树外内核模块（**已完成，insmod 时在内核里编出 IDR**）→ 阶段 1b 包成
-V4L2 M2M（**代码已完成，等板子回来验证**，ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑）→
-阶段 2 上游化（可选，2 周+）。**
+V4L2 M2M（**QEMU 上 `v4l2-compliance` 48/48 全过，实机只差 P 帧**，ffmpeg 的
+`h264_v4l2m2m` 不用打补丁就能跑）→ 阶段 2 上游化（可选，2 周+）。**
 
 硬件已经确认可用，见 [`docs/hardware-probes.md`](hardware-probes.md)。
 这份文档只讲驱动怎么写。
@@ -113,7 +113,7 @@ CMA 里的旧数据，ucode 的 RD 决策会读它们。解码画面照样对得
    v1.1.0 之后一个都不在，重建花掉半小时。`mmio` 的源码现在进了仓库：
    [`tools/hcenc/mmio.c`](../tools/hcenc/mmio.c)。
 
-## 阶段 1b：包成 V4L2 M2M（已编译通过，等实机验证）
+## 阶段 1b：包成 V4L2 M2M（QEMU 全过，等实机验证 P 帧）
 
 阶段 1a 的核心序列已经在内核里跑通，1b 把它包成 V4L2 stateful 编码器，
 让 ffmpeg 的 `h264_v4l2m2m` 和 gstreamer 的 `v4l2h264enc` 零补丁能用
@@ -130,6 +130,34 @@ CMA 里的旧数据，ucode 的 RD 决策会读它们。解码画面照样对得
 | `vermagic` | `5.10.268-ophub SMP preempt mod_unload aarch64` ← 和板子逐字一致 |
 | `depends` | `v4l2-mem2mem,videobuf2-dma-contig` ← modpost 实测，坐实了「必须先 modprobe」 |
 | `meson_hcodec.ko` | 56,216 B |
+
+### QEMU 上把 V4L2 那一半跑完了（2026-09-05，也不需要板子）
+
+[`scripts/hcodec-v4l2-qemu.sh`](../scripts/hcodec-v4l2-qemu.sh)：拿同一个冻结包里的真
+`Image` 在 QEMU virt / cortex-a53 上起 initramfs，`nohw=1` 加载模块（一个 HCODEC
+寄存器都不碰），然后 `v4l2-ctl` + `v4l2-compliance`。
+
+```
+HCV4L2_INSMOD ok            /dev/video0 出来了
+Detected Stateful Encoder
+1920x1080 NV12 → 1920/1088                      圆到整 MB
+1281x721  YU12 → 1296/736  bpl 1344  size 1483776   MFDIN 跨度对齐 64
+Total for meson-hcodec device /dev/video0: 48, Succeeded: 48, Failed: 0, Warnings: 0
+```
+
+**这一趟抓出 6 个真 bug**，其中第 1 个会让板子每次 insmod 都挂：
+
+| # | 症状 | 真因 |
+| --- | --- | --- |
+| 1 | insmod 当场 oops，`pc : v4l2_device_register+0x60` | `hc_pdev` 是 `register_simple` 出来的，`dev->driver` 是空的；名字留空时 `v4l2_device_register` 会去读 `dev->driver->name`。**必须自己 `strscpy` 名字** |
+| 2 | `test second /dev/video0 open: FAIL` | 独占闸设在 `open()` 上。挪到 `hc_start_streaming`（gstreamer 探测设备也需要能多开） |
+| 3 | `codec_mask & STATEFUL_ENCODER` 判失败，连带三条「H264 not reported by ENUM_FMT」 | 少了 `VIDIOC_ENUM_FRAMESIZES` —— stateful 编码器强制要求 |
+| 4 | `fmt_out.g_colorspace() != col` | colorimetry 硬编码成 REC709。要原样收下再带到 CAPTURE |
+| 5 | 找不到 `V4L2_CID_MIN_BUFFERS_FOR_OUTPUT` | 控件漏了 |
+| 6 | `stage=1` 时没有 `/dev/videoN` | 早退路径没走到注册；改成 `goto reg` |
+
+验不上的只有 ucode 和真编码：HCODEC 的 MMIO 在 QEMU 里不存在，碰一下就是同步外部
+abort（`hc_poweron+0x20` 实测），所以才有 `nohw=1` 这个参数。
 
 复现命令见 [README](../tools/hcodec-mod/README.md) 的「不用板子也能编」。
 

@@ -35,3 +35,38 @@ test('README 记着两个 =m 依赖', () => {
   // modpost 实测 depends: v4l2-mem2mem,videobuf2-dma-contig
   assert.match(readme, /modprobe v4l2-mem2mem videobuf2-dma-contig/);
 });
+
+// 下面三条是 QEMU 跑出来的（scripts/hcodec-v4l2-qemu.sh）。
+
+test('v4l2_device 的名字必须自己填', () => {
+  // hc_pdev 是 register_simple 出来的，dev->driver 是空的；名字留空时
+  // v4l2_device_register 会去读 dev->driver->name —— QEMU 上实测 insmod 当场 oops。
+  const reg = src.slice(src.indexOf('static int hc_v4l2_register('));
+  assert.match(reg.slice(0, reg.indexOf('v4l2_device_register(')), /strscpy\(hc_v4l2\.name,/);
+});
+
+test('ENUM_FRAMESIZES 不能少', () => {
+  // v4l2-compliance 对 stateful 编码器强制要求它（v4l2-test-formats.cpp:304），
+  // 少了会连带判「H264 not reported by ENUM_FMT」。
+  assert.match(src, /\.vidioc_enum_framesizes\s*=\s*hc_enum_framesizes,/);
+});
+
+test('独占闸设在 STREAMON，不设在 open', () => {
+  // 拦在 open() 上，gstreamer 探测设备会失败，v4l2-compliance 也判「second open」不合规。
+  const open = src.slice(src.indexOf('static int hc_open('), src.indexOf('static int hc_release('));
+  assert.doesNotMatch(open, /EBUSY/);
+  assert.match(src, /if \(hc_streamer && hc_streamer != ctx\)\s*\n\s*ret = -EBUSY;/);
+});
+
+test('colorimetry 原样 round-trip 并带到 CAPTURE', () => {
+  // 硬编码 REC709 时 v4l2-test-formats.cpp:953 判 S_FMT 不合规。
+  for (const f of ['colorspace', 'ycbcr_enc', 'quantization', 'xfer_func']) {
+    assert.match(src, new RegExp(`ctx->${f} = fmt->fmt\\.pix\\.${f};`));
+    assert.equal(src.match(new RegExp(`pix->${f} = ctx->${f};`, 'g'))?.length, 2); // OUTPUT + CAPTURE
+  }
+});
+
+test('MIN_BUFFERS_FOR_OUTPUT 控件不能少', () => {
+  // v4l2-test-controls.cpp:1182 对 stateful 编码器强制要求。
+  assert.match(src, /V4L2_CID_MIN_BUFFERS_FOR_OUTPUT, 1, 32, 1, 1\)/);
+});
