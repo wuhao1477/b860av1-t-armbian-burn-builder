@@ -81,9 +81,9 @@
 `drivers/amlogic/amports/arch/regs/hcodec_regs.h`，加载协议在同目录
 `encoder.c` 的 `amvenc_loadmc()` / `amvenc_start()` / `amvenc_stop()`。
 
-### 四个会让板子当场重启的坑
+### 五个会让板子当场重启的坑
 
-一共踩掉 4 次重启，无数据损坏。按踩到的概率排序：
+一共踩掉 5 次重启，无数据损坏。按踩到的概率排序：
 
 1. **Python 的 `mmap` + `struct.pack_into` 不能用来写 MMIO。** 它不保证发出单条对齐
    的 32 位存储，逐字节写 HHI/DOS 寄存器会触发总线 abort → 看门狗复位。表现极具
@@ -99,6 +99,9 @@
    但会给出「上电成功可是时钟读 0」的假阴性。
 4. **有风险的读不要和测量放在同一个进程里。** 一次崩溃会把还没 flush 的日志一起带走。
    板上脚本因此拆成 `hcodec_up.sh`（上电+测频）和 `hcodec_scratch.sh`（碰寄存器）两次跑。
+5. **上电序列结尾的 `mdelay(10)` 不能省**（厂商 `avc_poweron()` 最后一行）。去隔离后
+   只等 10 µs 就读 `ENCODER_STATUS`，整机硬挂：ssh 15 s 内断、ping 全丢、约 90 s 后
+   自己重启。这是第 2 条坑的时间维度版本 —— 隔离位清了，子块还没真正醒。
 
 顺带两条：AO 域寄存器（`SLEEP0`/`ISO0`）**能扛过看门狗复位**，复位前写进去的值还在；
 `/sys/kernel/debug/meson-clk-msr/clks/<name>` 是 SoC 自带的硬件频率计，是这套探测里
@@ -135,7 +138,18 @@
 日志 `/root/hcodec-c.log`、`/root/hcodec-mc.log`、`/root/hcodec-fw.log`。
 **跑 `hcodec_fw` 之前必须先跑 `hcodec_up.sh`**，否则第 2 条坑当场生效。
 
+**刷机会把 `/root` 下这一整套清空**，重建一次要半小时。所以 `mmio` 的源码进了仓库：
+[`tools/hcenc/mmio.c`](../tools/hcenc/mmio.c)，`gcc -O2 -o mmio mmio.c` 就能用。
+
+**这块板子没有事后现场**：`/sys/fs/pstore` 是空的（cmdline 里有 `ramoops.*`，但 DT
+没有 `reserved-memory` 节点，backend 根本没注册），`/var/log` 在 tmpfs
+（armbian-ramlog），也没有串口线。硬挂之后 dmesg 一个字都不剩。唯一可用的手段是
+**每步往盘上写一行并 `vfs_fsync`**，重启后最后一行就是挂住的那步 ——
+`tools/hcodec-mod` 的 `marklog=` / `stage=` 参数就是干这个的。
+
 ### 还差什么
 
-只差驱动。mainline 5.10 一行 Amlogic 编码代码都没有（`meson-vdec` 只解码）。
-实施规划见 [`docs/hcodec-encoder-plan.md`](hcodec-encoder-plan.md)。
+用户态原型和树外内核模块都跑通了（阶段 0 / 1a，实机编出可解码的 IDR），
+剩下的是包成 V4L2 M2M（阶段 1b）让 ffmpeg / gstreamer 零补丁能用。
+mainline 5.10 依旧一行 Amlogic 编码代码都没有（`meson-vdec` 只解码）。
+实施规划和实机结果见 [`docs/hcodec-encoder-plan.md`](hcodec-encoder-plan.md)。

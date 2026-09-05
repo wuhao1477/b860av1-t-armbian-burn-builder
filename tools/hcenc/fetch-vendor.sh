@@ -55,4 +55,7 @@ EOF
 } >"$OUT/vendor.inc"
 
 cp "$(dirname "$0")"/{hcenc.c,kshim.h,venc_defs.h} "$OUT/"
-echo "ready: cd $OUT && gcc -O2 -w -o hcenc hcenc.c"
+# 阶段 1 的内核模块：同一批切片，同一个目录里编。
+cp "$(dirname "$0")"/../hcodec-mod/{meson_hcodec.c,kmshim.h,Makefile} "$OUT/"
+echo "userspace: cd $OUT && gcc -O2 -w -o hcenc hcenc.c"
+echo "module:    make -C /lib/modules/\$(uname -r)/build M=$OUT modules"
