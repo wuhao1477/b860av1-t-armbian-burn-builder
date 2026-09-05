@@ -50,6 +50,7 @@
 | swap | zram 400 MB（`armbian-zram-config`，靠 `sysinit.target.d` drop-in 起来） |
 | 开机 | 禁用 `NetworkManager-wait-online`，实机 24.3 s 进系统（首刷含 resize 30.6 s） |
 | 硬解 | `meson-vdec` 微码装在 `/lib/firmware/meson/vdec/`，H.264 实机解通（上游镜像里这个目录整个不存在，缺了 `VIDIOC_STREAMON` 直接 `-EINVAL`，见 [`docs/known-issues.md`](docs/known-issues.md) 第 10 条）。**`v1.1.0` 起才有，`v1.0.0` 里没有** |
+| 硬编 | 树外模块 `meson_hcodec.ko` 装在 `/lib/modules/<release>/extra/`，`stage=1 selftest=0` 开机自动加载，出来一个 V4L2 编码器节点（`ffmpeg -c:v h264_v4l2m2m` / `gst v4l2h264enc` 零补丁能用）。mainline 5.10 只有解码，编码这块硬件在上游内核里根本没有驱动，见 [`docs/hcodec-encoder-plan.md`](docs/hcodec-encoder-plan.md)。**下一个 tag 起才有** |
 
 swap 为什么一开始没起来（构建时写进 rootfs 的 `*.wants` 符号链接一条都没进镜像，同一
 毫秒写的常规文件全在），见 [`docs/known-issues.md`](docs/known-issues.md) 第 7、8 条。

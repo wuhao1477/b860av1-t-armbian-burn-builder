@@ -372,6 +372,11 @@ test('burn workflow builds the vendor-boot package from the frozen raw release',
     'src/emmc-boot-chain.mjs',
     // rootfs 预置（首登向导、root 口令、zram、resize2fs）也决定包的内容。
     'scripts/apply-rootfs-defaults.sh',
+    // 树外编码模块是包里的字节，源码或构建脚本一改就得出新包。
+    'scripts/build-hcodec-module.sh',
+    'tools/hcodec-mod/meson_hcodec.c',
+    'tools/hcenc/fetch-vendor.sh',
+    'config/sources.json',
   ]) {
     assert.match(recipeList, new RegExp(recipeInput.replaceAll('.', '\\.')));
   }

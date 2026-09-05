@@ -18,6 +18,12 @@ M2M 编码器。对应 [`../../docs/hcodec-encoder-plan.md`](../../docs/hcodec-e
   跑法见下面的「不用板子也能验」，明细见
   [`../../docs/hcodec-encoder-plan.md`](../../docs/hcodec-encoder-plan.md)。
 
+- **1c 已做进直刷包（2026-09-05）**：`scripts/build-hcodec-module.sh` 在 CI 上现编，
+  `apply-rootfs-defaults.sh` §7 装到 `/lib/modules/<release>/extra/` 并 `depmod -b`，
+  配上 `/etc/modules-load.d` + `/etc/modprobe.d`（`stage=1 selftest=0`）开机自动加载。
+  连续 4 次冷启动都是「起来就有 `/dev/videoN`，首次编码正常」（62174 / 63906 /
+  65530 / 65945 字节）。**下面那些手工步骤只有开发时才需要 —— 刷完机就已经加载好了。**
+
 ## 不用板子也能编
 
 冻结的内核包里那份 `header-5.10.268-ophub.tar.gz` 就是板上的

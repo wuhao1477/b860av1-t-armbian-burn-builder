@@ -21,7 +21,7 @@ root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 metadata="$(dirname -- "$raw")/boot-components.json"
 [[ -f "$raw" && -f "$metadata" ]] || { echo 'raw image or boot-components.json not found' >&2; exit 1; }
 
-for command in blkid debugfs fdtget gzip losetup mcopy mformat mmd node sha256sum; do
+for command in blkid debugfs depmod fdtget gzip losetup mcopy mformat mmd node sha256sum; do
   command -v "$command" >/dev/null || { echo "$command is required" >&2; exit 1; }
 done
 
@@ -91,6 +91,11 @@ root_size=$(sudo blockdev --getsize64 "$root_part")
 sudo sed -i '\@[[:space:]]/boot[[:space:]]@d' "$root_mount/etc/fstab" 2>/dev/null || true
 "$root/scripts/apply-rootfs-defaults.sh" "$root_mount"
 
+# 镜像里那颗内核的 release，下面复查 hcodec 模块要用。apply-rootfs-defaults.sh §7
+# 已经断言过只有一颗，这里只是取名字。
+kernel_release=$(basename -- "$(echo "$root_mount"/lib/modules/*/)")
+hcodec_ko="/lib/modules/$kernel_release/extra/meson_hcodec.ko"
+
 node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/Image.gz" >/dev/null
 cp -- "$initrd" "$tmp/initrd.img"
 node "$root/scripts/burn-image.mjs" standalone-dtb \
@@ -134,13 +139,23 @@ mapfile -t vdec_blobs < <(node -e '
   const spec = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).vdecFirmware;
   for (const file of Object.keys(spec.files)) console.log(`${spec.installPath}/${file}`);
 ' "$root/config/board.json")
-for dropin in "$zram_dropin" "$expand_dropin" "${vdec_blobs[@]}"; do
+for dropin in "$zram_dropin" "$expand_dropin" "${vdec_blobs[@]}" "$hcodec_ko"; do
   sudo debugfs -R "stat $dropin" "$tmp/rootfs.ext4" 2>&1 | grep -q '^Inode:' || {
     echo "drop-in is missing from the packaged rootfs: $dropin" >&2
     exit 1
   }
   echo "  rootfs: drop-in 已在包里 $dropin"
 done
+# 光有 .ko 不够：modprobe 靠 modules.dep 找它、也靠 modules.dep 先加载
+# v4l2-mem2mem / videobuf2-dma-contig（ophub 内核里是 =m）。索引没重生成的话，
+# 开机 systemd-modules-load 会静默失败，实机表现是「没有 /dev/videoN」。
+hcodec_dep=$(sudo debugfs -R "cat /lib/modules/$kernel_release/modules.dep" \
+  "$tmp/rootfs.ext4" 2>/dev/null | grep '^extra/meson_hcodec\.ko:' || true)
+[[ "$hcodec_dep" == *v4l2-mem2mem.ko* && "$hcodec_dep" == *videobuf2-dma-contig.ko* ]] || {
+  echo "modules.dep in the packaged rootfs does not resolve meson_hcodec: ${hcodec_dep:-<缺行>}" >&2
+  exit 1
+}
+echo "  rootfs: modules.dep 已带上 meson_hcodec 及其两个依赖"
 sudo debugfs -R 'ls -l /etc/systemd/system/sysinit.target.wants' "$tmp/rootfs.ext4" 2>/dev/null \
   | sed 's/^/  rootfs: sysinit.target.wants: /'
 

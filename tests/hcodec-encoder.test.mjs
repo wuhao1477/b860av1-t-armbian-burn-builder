@@ -120,3 +120,17 @@ test('三帧测试的分辨率必须页对齐（v4l2-ctl 按 g_length 读文件�
   assert.ok(qemu.includes(`bs=${sizeimage} count=`), `dd 的 bs 要等于 sizeimage ${sizeimage}`);
   assert.match(qemu, /--stream-out-mmap 4 --stream-count 3/); // 不给数量就只有 1 个缓冲区
 });
+
+const builder = fs.readFileSync(new URL('../scripts/build-hcodec-module.sh', import.meta.url), 'utf8');
+
+test('构建脚本必须核对冻结内核包的摘要，并按包里的名字取 release', () => {
+  // 头文件树决定 vermagic；换了内核包而没重编模块，实机就是「没有 /dev/videoN」。
+  assert.match(builder, /frozen kernel package digest mismatch/);
+  assert.match(builder, /kernel\.digest is invalid/);
+  // release 写在 header-<release>.tar.gz 的名字里，硬编就会在上游改版号时静默错。
+  assert.match(builder, /header_entry=\$\(tar tzf "\$tarball" \| grep -E "\^\$\{kernel_version\}\/header-/);
+  assert.match(builder, /module vermagic does not match the frozen kernel/);
+  // x86 runner 上头文件树自带的 fixdep/modpost 是 aarch64 ELF，必须用 host cc 重编。
+  assert.match(builder, /cc -O2 -o scripts\/basic\/fixdep scripts\/basic\/fixdep\.c/);
+  assert.match(builder, /ARCH=arm64 CROSS_COMPILE="\$cross" M="\$work\/build" modules/);
+});

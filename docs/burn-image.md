@@ -227,7 +227,11 @@ scripts/validate-vendor-boot-burn.sh out/burn.img out/vendor-boot-contract.json
 上游换了东西就红，不会自己跟到新的 raw release（[`frozen-inputs.md`](frozen-inputs.md)）。
 `build-burn-payloads.sh` 里还会在 rootfs 上跑
 [`apply-rootfs-defaults.sh`](../scripts/apply-rootfs-defaults.sh) 做预置，并在 `dd` 之后用
-`debugfs` 复查 drop-in 真的在要写进 eMMC 的那份 ext4 里。
+`debugfs` 复查 drop-in 真的在要写进 eMMC 的那份 ext4 里。预置里有一样是自己编的：
+树外的 H.264 硬件编码模块 `meson_hcodec.ko`（[`scripts/build-hcodec-module.sh`](../scripts/build-hcodec-module.sh)
+在 runner 上交叉编，9 秒），装到 `/lib/modules/<release>/extra/` 并 `depmod -b`，
+`stage=1 selftest=0` 开机自动加载 —— mainline 5.10 只有解码，见
+[`hcodec-encoder-plan.md`](hcodec-encoder-plan.md) 阶段 1c。
 
 构建过程中强制断言的不变量：
 

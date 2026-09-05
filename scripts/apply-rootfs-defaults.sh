@@ -46,6 +46,11 @@ say() { echo "  rootfs: $*"; }
 # 真跑时要 sudo（rootfs 里的文件属 root）；测试时用 SUDO= 关掉。
 sudo=${SUDO-sudo}
 
+# 临时目录统一在退出时收掉：EXIT trap 只有一个，§6 和 §7 各设一个会互相顶掉。
+scratch=()
+cleanup() { [[ ${#scratch[@]} -gt 0 ]] && rm -rf "${scratch[@]}"; return 0; }
+trap cleanup EXIT
+
 # ---- 1. 关掉首登向导 ----------------------------------------------------
 # armbian-firstlogin 的触发条件就是这个文件存在（且是 tty 登录）。它会依次问
 # shell、用户名、密码、真名、locale、时区、WiFi —— 每次重刷都要重来一遍。
@@ -250,7 +255,7 @@ firmware_dir=${VDEC_FIRMWARE_DIR-}
 firmware_tmp=''
 if [[ -z "$firmware_dir" ]]; then
   firmware_tmp=$(mktemp -d)
-  trap 'rm -rf "$firmware_tmp"' EXIT
+  scratch+=("$firmware_tmp")
   "$(dirname -- "${BASH_SOURCE[0]}")/fetch-vdec-firmware.sh" "$firmware_tmp"
   firmware_dir=$firmware_tmp
 fi
@@ -279,3 +284,76 @@ for blob in "${firmware_files[@]}"; do
   }
 done
 say "已装 ${#firmware_files[@]} 个 vdec 微码到 $firmware_target"
+
+# ---- 7. H.264 硬件编码模块 -----------------------------------------------
+# mainline 5.10 只有 meson-vdec（解码），编码一行代码都没有，所以硬编靠树外模块
+# meson_hcodec.ko。它跟 vdec 微码是同一类东西 ——「不装就等于这块硬件不存在」——
+# 实机手工 insmod 跑完一整轮才搬进包，见 docs/hcodec-encoder-plan.md 阶段 1b。
+#
+# 编译由 scripts/build-hcodec-module.sh 做（拿冻结内核包里的头文件树交叉编，9 秒）。
+# 测试用 HCODEC_MODULE_DIR 指到桩目录跳过编译、DEPMOD=true 跳过 kmod ——
+# 和 §6 的 VDEC_FIRMWARE_DIR、上面的 SUDO= 一个套路。
+hcodec_dir=${HCODEC_MODULE_DIR-}
+if [[ -z "$hcodec_dir" ]]; then
+  hcodec_dir=$(mktemp -d)
+  scratch+=("$hcodec_dir")
+  "$(dirname -- "${BASH_SOURCE[0]}")/build-hcodec-module.sh" "$hcodec_dir"
+fi
+[[ -f "$hcodec_dir/meson_hcodec.ko" && -f "$hcodec_dir/kernel-release" ]] || {
+  echo "no meson_hcodec.ko in $hcodec_dir" >&2
+  exit 1
+}
+hcodec_release=$(cat "$hcodec_dir/kernel-release")
+
+# vermagic 必须逐字等于镜像里那颗内核，差一个字符 insmod 就是 version magic 不符。
+# rootfs 里只应该有一颗内核，多了说明底包换了，别猜。
+shopt -s nullglob
+module_dirs=("$root_mount"/lib/modules/*/)
+shopt -u nullglob
+[[ ${#module_dirs[@]} -eq 1 ]] || {
+  echo "expected exactly one kernel in the rootfs, found ${#module_dirs[@]}" >&2
+  exit 1
+}
+rootfs_release=$(basename -- "${module_dirs[0]}")
+[[ "$rootfs_release" == "$hcodec_release" ]] || {
+  echo "hcodec module was built for $hcodec_release but the rootfs ships $rootfs_release" >&2
+  exit 1
+}
+
+# 编码 ucode 不用我们装：ophub 的底包里本来就有 /lib/firmware/video/h264_enc.bin
+# （76288 字节，模块按 HC_FW_GXL_OFF=51712 从里面切 GXL 那一段）。哪天上游把它去掉，
+# 装了模块也编不出东西，而实机表现只是「一 STREAMON 就报错」，最难查 —— 让构建红。
+hcodec_ucode=/lib/firmware/video/h264_enc.bin
+$sudo test -f "$root_mount$hcodec_ucode" || {
+  echo "the rootfs is missing the encoder microcode $hcodec_ucode" >&2
+  exit 1
+}
+hcodec_extra="/lib/modules/$rootfs_release/extra"
+$sudo mkdir -p "$root_mount$hcodec_extra" \
+  "$root_mount/etc/modprobe.d" "$root_mount/etc/modules-load.d"
+$sudo cp -- "$hcodec_dir/meson_hcodec.ko" "$root_mount$hcodec_extra/meson_hcodec.ko"
+$sudo chmod 0644 "$root_mount$hcodec_extra/meson_hcodec.ko"
+
+# stage=1 selftest=0 是唯一能开机自动加载的组合：模块只做映射 + 注册 /dev/videoN，
+# 上电 / ucode / 起 AMRISC 全推到第一次 STREAMON（hc_hw_setup 的懒初始化）。
+# 默认的 stage=9 会让 systemd-modules-load 在开机极早期就点硬件，实测卡死冷启动。
+$sudo tee "$root_mount/etc/modprobe.d/meson_hcodec.conf" >/dev/null <<'CONF'
+# 由 scripts/apply-rootfs-defaults.sh 写入。stage=1 = 只映射 + 注册节点，硬件等到
+# 第一次 STREAMON 再上电；selftest=0 = insmod 时别编那帧合成图。
+options meson_hcodec stage=1 selftest=0
+CONF
+$sudo tee "$root_mount/etc/modules-load.d/meson_hcodec.conf" >/dev/null <<'CONF'
+# 由 scripts/apply-rootfs-defaults.sh 写入。常规文件 —— 符号链接进不了镜像，
+# 见 docs/known-issues.md 第 8 条。
+meson_hcodec
+CONF
+
+# modules.dep 必须重生成：不然 modprobe 既找不到 extra/ 里的模块，也不会先带上
+# v4l2-mem2mem / videobuf2-dma-contig（这两个在 ophub 内核里是 =m，少了就是
+# unknown symbol）。索引真的对不对由 build-burn-payloads.sh 在 dd 出来的字节上复查。
+$sudo ${DEPMOD-depmod} -b "$root_mount" "$rootfs_release"
+$sudo test -f "$root_mount$hcodec_extra/meson_hcodec.ko" || {
+  echo 'meson_hcodec.ko did not land in the rootfs' >&2
+  exit 1
+}
+say "已装 meson_hcodec.ko 到 $hcodec_extra（stage=1 开机自动加载）"

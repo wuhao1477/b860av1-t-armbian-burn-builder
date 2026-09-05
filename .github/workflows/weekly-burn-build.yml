@@ -74,6 +74,9 @@ jobs:
             scripts/build-burn-payloads.sh scripts/build-vendor-boot-burn.sh \
             scripts/validate-vendor-boot-burn.sh scripts/setup-image-tools.sh \
             scripts/apply-rootfs-defaults.sh scripts/fetch-vdec-firmware.sh \
+            scripts/build-hcodec-module.sh config/sources.json \
+            tools/hcenc/fetch-vendor.sh tools/hcodec-mod/meson_hcodec.c \
+            tools/hcodec-mod/kmshim.h tools/hcodec-mod/Makefile \
             scripts/burn-image.mjs scripts/mainline-boot.mjs \
             src/android-sparse.mjs src/burn-dtb-roles.mjs src/emmc-boot-chain.mjs \
             | sha256sum | awk '{print $1}')
@@ -105,7 +108,7 @@ jobs:
       - name: Install image tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes curl device-tree-compiler dosfstools e2fsprogs file gcc-aarch64-linux-gnu git gzip kpartx libgnutls28-dev mtools u-boot-tools util-linux xz-utils
+          sudo apt-get install --yes build-essential curl device-tree-compiler dosfstools e2fsprogs file gcc-aarch64-linux-gnu git gzip kmod kpartx libgnutls28-dev mtools u-boot-tools util-linux xz-utils
       - uses: dtolnay/rust-toolchain@6d653acede28d24f02e3cd41383119e8b1b35921
         with:
           toolchain: stable

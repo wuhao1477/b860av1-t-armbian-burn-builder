@@ -17,6 +17,10 @@ const rootHash = '$6$b860burn$21d1hZz5IOJZocmktz6vVDYwbPhywU7WZtS.7vOC73/M5HGWXU
 // 内容随便 —— 真下载由 scripts/fetch-vdec-firmware.sh 负责，测试不联网。
 const vdec = JSON.parse(fs.readFileSync(path.join(root, 'config/board.json'), 'utf8')).vdecFirmware;
 
+// 树外编码模块的 vermagic 必须逐字等于镜像里那颗内核。冻结的内核包在 sources.json
+// 里，ophub 的 release 就是 <version>-ophub —— 重钉内核时这个测试的桩会跟着走。
+const kernelRelease = `${JSON.parse(fs.readFileSync(path.join(root, 'config/sources.json'), 'utf8')).kernel.version}-ophub`;
+
 // 造一个刚好够 apply-rootfs-defaults.sh 认得出来的 rootfs：
 // 上游 Armbian 里这几个文件的位置和 [Install] 段都是实机确认过的。
 function fakeRootfs(context) {
@@ -25,6 +29,7 @@ function fakeRootfs(context) {
   for (const relative of [
     'etc/systemd/system/network-online.target.wants',
     'usr/lib/systemd/system', 'usr/local/sbin', 'usr/bin', 'root',
+    `lib/modules/${kernelRelease}`, 'lib/firmware/video',
   ]) fs.mkdirSync(path.join(directory, relative), { recursive: true });
   fs.writeFileSync(path.join(directory, 'etc/passwd'),
     'root:x:0:0:root:/root:/bin/bash\ndaemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin\n');
@@ -45,16 +50,30 @@ function fakeRootfs(context) {
   for (const file of Object.keys(vdec.files)) {
     fs.writeFileSync(path.join(directory, 'vdec-stub', file), `stub ${file}\n`);
   }
+  // 编码 ucode 由 ophub 底包自带（76288 字节），我们只断言它在；桩里内容随便。
+  fs.writeFileSync(path.join(directory, 'lib/firmware/video/h264_enc.bin'), 'stub ucode\n');
+  // 编码模块桩目录：真编译走 scripts/build-hcodec-module.sh，测试不下 80 MB 内核包。
+  fs.mkdirSync(path.join(directory, 'hcodec-stub'));
+  fs.writeFileSync(path.join(directory, 'hcodec-stub/meson_hcodec.ko'), 'stub ko\n');
+  fs.writeFileSync(path.join(directory, 'hcodec-stub/kernel-release'), `${kernelRelease}\n`);
   return directory;
 }
 
 function apply(directory, extra = {}) {
   // SUDO= 关掉 sudo：临时目录归当前用户，真跑时 rootfs 里的文件才需要 root。
-  // VDEC_FIRMWARE_DIR 指到桩目录，否则每个测试都会去 git.kernel.org 下微码。
+  // VDEC_FIRMWARE_DIR / HCODEC_MODULE_DIR 指到桩目录，否则每个测试都要去
+  // git.kernel.org 下微码、去 GitHub 下内核包再交叉编。DEPMOD=true 是因为
+  // macOS 上没有 kmod —— modules.dep 到底对不对由 build-burn-payloads.sh 在
+  // dd 出来的字节上用 debugfs 复查（下面「the packager verifies」那条测试守着）。
   return childProcess.spawnSync('bash', [script, directory], {
     encoding: 'utf8',
     env: {
-      ...process.env, SUDO: '', VDEC_FIRMWARE_DIR: path.join(directory, 'vdec-stub'), ...extra,
+      ...process.env,
+      SUDO: '',
+      VDEC_FIRMWARE_DIR: path.join(directory, 'vdec-stub'),
+      HCODEC_MODULE_DIR: path.join(directory, 'hcodec-stub'),
+      DEPMOD: 'true',
+      ...extra,
     },
   });
 }
@@ -208,6 +227,48 @@ test('rootfs defaults fail loudly when no vdec firmware is available', (context)
   assert.match(result.stderr, /no vdec firmware in/);
 });
 
+test('rootfs defaults install the out-of-tree module that hardware encode needs', (context) => {
+  // mainline 5.10 只有 meson-vdec（解码），编码一行都没有 —— 不把 meson_hcodec.ko
+  // 做进包，重刷之后 H.264 硬编就等于不存在（实机 1b 验证过才搬进来的）。
+  const directory = fakeRootfs(context);
+
+  assert.equal(apply(directory).status, 0);
+
+  const ko = path.join(directory, `lib/modules/${kernelRelease}/extra/meson_hcodec.ko`);
+  assert.ok(fs.existsSync(ko), 'the module must land next to the kernel it was built for');
+  assert.equal(fs.statSync(ko).mode & 0o777, 0o644);
+  // stage=1 selftest=0 是唯一能开机自动加载的组合：硬件推到第一次 STREAMON 才上电，
+  // 默认的 stage=9 会让 systemd-modules-load 在开机极早期点硬件，实测卡死冷启动。
+  const options = fs.readFileSync(path.join(directory, 'etc/modprobe.d/meson_hcodec.conf'), 'utf8');
+  assert.match(options, /^options meson_hcodec stage=1 selftest=0$/m);
+  // 两个都得是常规文件：符号链接进不了镜像（docs/known-issues.md 第 8 条）。
+  const autoload = fs.readFileSync(path.join(directory, 'etc/modules-load.d/meson_hcodec.conf'), 'utf8');
+  assert.match(autoload, /^meson_hcodec$/m);
+});
+
+test('rootfs defaults refuse a module built for a different kernel', (context) => {
+  // vermagic 差一个字符 insmod 就是 version magic 不符，而实机表现只是「没有
+  // /dev/videoN」—— 上游换内核时必须在构建机上就红，不能等刷完机才发现。
+  const directory = fakeRootfs(context);
+  fs.writeFileSync(path.join(directory, 'hcodec-stub/kernel-release'), '5.10.999-ophub\n');
+
+  const result = apply(directory);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /hcodec module was built for 5\.10\.999-ophub but the rootfs ships/);
+});
+
+test('rootfs defaults refuse a rootfs without the encoder microcode', (context) => {
+  // ucode 由 ophub 底包自带；哪天它没了，模块装了也编不出东西。
+  const directory = fakeRootfs(context);
+  fs.rmSync(path.join(directory, 'lib/firmware/video/h264_enc.bin'));
+
+  const result = apply(directory);
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /missing the encoder microcode \/lib\/firmware\/video\/h264_enc\.bin/);
+});
+
 test('the packager verifies the preseed on the image it is about to sparse', () => {
   // 「脚本打印了启用」和「字节真的在包里」是两件事，build-47.1 就是在这里出事的。
   // 所以 dd 之后必须用 debugfs 复查一遍 drop-in，缺了让构建红。
@@ -221,8 +282,13 @@ test('the packager verifies the preseed on the image it is about to sparse', () 
   assert.match(packager, /zram_dropin=\/etc\/systemd\/system\/sysinit\.target\.d\/10-b860-armbian-zram-config\.conf/);
   assert.match(packager, /expand_dropin=\/etc\/systemd\/system\/multi-user\.target\.d\/10-b860-expand-rootfs\.conf/);
   // 微码走同一个 debugfs 循环：清单从 board.json 读，加第四个文件不用改脚本。
-  assert.match(between, /for dropin in "\$zram_dropin" "\$expand_dropin" "\$\{vdec_blobs\[@\]\}"/);
+  assert.match(between, /for dropin in "\$zram_dropin" "\$expand_dropin" "\$\{vdec_blobs\[@\]\}" "\$hcodec_ko"/);
   assert.match(between, /vdecFirmware/);
+  // .ko 在包里还不够：modprobe 靠 modules.dep 找它、也靠它先加载那两个 =m 依赖。
+  // 索引没重生成的话开机 systemd-modules-load 静默失败，实机就是「没有 /dev/videoN」。
+  assert.match(between, /modules\.dep in the packaged rootfs does not resolve meson_hcodec/);
+  assert.match(between, /v4l2-mem2mem\.ko\*/);
+  assert.match(between, /videobuf2-dma-contig\.ko\*/);
 });
 
 test('rootfs defaults reject a directory that is not a rootfs', (context) => {

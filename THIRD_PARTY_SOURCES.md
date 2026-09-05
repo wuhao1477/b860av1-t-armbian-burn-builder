@@ -66,7 +66,31 @@ project therefore does not claim bit-for-bit kernel reproducibility. That
 limitation is explicit instead of being replaced by an unverified provenance
 claim.
 
-## Public release policy
+## Out-of-tree H.264 encoder module
+
+The direct-flash image ships one kernel module this project builds itself:
+`/lib/modules/<release>/extra/meson_hcodec.ko`, a V4L2 stateful M2M encoder for
+the S905X HCODEC block (mainline 5.10 has decode only). **The module is
+GPL-2.0**, because it links against the kernel and reuses Amlogic's register
+sequences, so its complete corresponding source is:
+
+- `tools/hcodec-mod/` in this repository (`meson_hcodec.c`, `kmshim.h`,
+  `Makefile`) — the driver itself;
+- the vendor GPL-2.0 slices listed in `tools/hcenc/fetch-vendor.sh`, fetched at
+  build time from <https://github.com/khadas/linux> against pinned SHA-256
+  digests rather than vendored here;
+- the kernel headers from the frozen `ophub/kernel` package named in
+  `config/sources.json`, which is the same tree documented under
+  "Linux kernel" above.
+
+`scripts/build-hcodec-module.sh` is the exact recipe: it verifies the frozen
+kernel digest, cross-builds with `ARCH=arm64`, and asserts the resulting
+`vermagic` equals the kernel in the image. The encoder microcode it loads
+(`/lib/firmware/video/h264_enc.bin`) is inherited from the Armbian base image
+and is not added, modified or redistributed separately by this project. This
+repository's MIT license covers neither the module binary nor the microcode.
+
+
 
 The weekly detector audits every non-draft `armbian-*` Release before it
 compares fingerprints. Public releases must be prereleases using manifest schema 5 and

@@ -4,7 +4,7 @@
 阶段 1a 树外内核模块（**已完成，insmod 时在内核里编出 IDR**）→ 阶段 1b 包成
 V4L2 M2M（**已完成，实机 I+P 多帧码流用 ffmpeg 解出来 49~99 dB**，`v4l2-compliance`
 48/48 全过，ffmpeg 的 `h264_v4l2m2m` 不用打补丁就能跑）→
-阶段 2 上游化（可选，2 周+）。**
+**阶段 1c 做进直刷包（已完成，见下）** → 阶段 2 上游化（可选，2 周+）。**
 
 硬件已经确认可用，见 [`docs/hardware-probes.md`](hardware-probes.md)。
 这份文档只讲驱动怎么写。
@@ -282,6 +282,39 @@ h264_i_frame_qp_value=26,h264_p_frame_qp_value=26 \
 5. **绑定方式** ✅：没抢 `video-codec@c8820000`，直接 `ioremap` 同一个 DOS 窗口
    （不 `request_mem_region`），复位脉冲只打 hcodec 的位
    （`amvenc_reset()` 那组 = `0x341c4`），`DOS_GCLK_EN0` 用 `|=`。
+
+## 阶段 1c：做进直刷包 ✅ 已完成（2026-09-05）
+
+在此之前模块是手工 `scp` + `insmod` 的，**重刷一次就没了**。现在它是包里的字节：
+
+| 位置 | 内容 |
+| --- | --- |
+| `/lib/modules/<release>/extra/meson_hcodec.ko` | 模块本体，`depmod -b` 已重建索引 |
+| `/etc/modules-load.d/meson_hcodec.conf` | 一行 `meson_hcodec`，开机自动加载 |
+| `/etc/modprobe.d/meson_hcodec.conf` | `options meson_hcodec stage=1 selftest=0` |
+| `/lib/firmware/video/h264_enc.bin` | 编码 ucode，**ophub 底包自带**，我们只断言它在 |
+
+构建侧：[`scripts/build-hcodec-module.sh`](../scripts/build-hcodec-module.sh) 在
+runner 上现编（x86 上交叉编 9 秒），[`apply-rootfs-defaults.sh`](../scripts/apply-rootfs-defaults.sh)
+§7 装进 rootfs，[`build-burn-payloads.sh`](../scripts/build-burn-payloads.sh) 在 `dd`
+出来的 ext4 上用 `debugfs` 复查 `.ko` 和 `modules.dep` —— 后者是这一段唯一的隐患：
+索引没重建的话 `systemd-modules-load` 会静默失败，实机表现只是「没有 `/dev/videoN`」。
+
+**`stage=1 selftest=0` 不是省事，是必须的。** 默认的 `stage=9` 会让
+`systemd-modules-load`（`DefaultDependencies=no`，开机极早期）当场上电、灌 ucode、起
+AMRISC，实测把冷启动卡死。`stage=1` 只做映射 + 注册 `/dev/videoN`，硬件推到第一次
+`STREAMON`（`hc_hw_setup()` 的懒初始化）。顺带一条：那个早期阶段 `/` 还是只读的，
+所以 `marklog` 在自动加载路径上永远写不出来，别指望它做事后取证。
+
+**冷启动可靠性：4/4。** 每轮「断电重启 → 自动加载 → 首次编码 1280x768 十帧 GOP →
+空转 3 分钟」全过，帧字节数 62174 / 63906 / 65530 / 65945，三分钟后 uptime 都还在
+220 s 上下（没重启）。**但更早的一轮里有过 1 次编码中途自发重启**，当时没有取证手段
+（`/sys/fs/pstore` 空、`/var/log` 是 ramlog tmpfs、systemd 没喂看门狗），换成
+`stage=1` 之后 4 轮没再出现 —— 记在这里，不当它已经解决。
+
+**代价：CMA 从开机起被占 19.4 MB**（`CmaTotal` 只有 64 MB）。1080p 硬解实测照样
+40/40 帧解通，`cma_alloc: alloc failed` 那几行是 `use_cma_first=1` 的正常回退。
+真要省，就把 `hc_wq_init` 的分配挪到第一次 `STREAMON` —— 现在不做（YAGNI）。
 
 ## 阶段 2：上游化（可选，2 周+）
 
