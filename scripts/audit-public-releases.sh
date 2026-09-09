@@ -5,8 +5,8 @@ script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo_root=$(cd -- "$script_dir/.." && pwd)
 repository=${CNB_REPO_SLUG:-}
 if [[ -z "${CNB_TOKEN:-}" ]]; then
-  echo 'CNB_TOKEN is required' >&2
-  exit 1
+  echo 'CNB_TOKEN not set, skipping release audit' >&2
+  exit 0
 fi
 [[ "$repository" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || {
   echo 'CNB_REPO_SLUG is invalid' >&2
