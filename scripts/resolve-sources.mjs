@@ -197,7 +197,7 @@ function basePatterns(codename) {
   const escaped = escapeRegex(codename);
   return {
     asset: new RegExp(`^Armbian_\\d+\\.\\d+\\.\\d+-trunk_${escaped}_arm64_\\d+\\.\\d+\\.\\d+\\.img\\.gz$`),
-    release: new RegExp(`^Armbian_${escaped}_arm64_server_`),
+    release: new RegExp(`^Armbian_${escaped}_arm64_server_2026\\.09$`),
   };
 }
 

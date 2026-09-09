@@ -1,8 +1,8 @@
 {
   "schemaVersion": 5,
   "base": {
-    "repository": "wuhao1477/b860av1-t-armbian-burn-builder",
-    "comment": "Self-hosted: ophub no longer provides 5.10 kernel needed for WiFi (RTL8189FTV)"
+    "repository": "ophub/amlogic-s9xxx-armbian",
+    "releaseTag": "Armbian_trixie_arm64_server_2026.09"
   },
   "kernel": {
     "repository": "ophub/kernel",
