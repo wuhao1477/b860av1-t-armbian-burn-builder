@@ -22,7 +22,7 @@ env:
   SOURCE_REPOSITORY: wuhao1477/b860av1-t-armbian-burn-builder
   SOURCE_RELEASE: armbian-26.11.0-debian-13.6-trixie-k5.10.268-build-16.1
   SOURCE_ASSET: Armbian_26.11.0_amlogic_b860av1-t_trixie_5.10.268_server_2026.09.09.img.gz
-  SOURCE_DIGEST: a56fca2d3ca01b65d28b37d729a79a89eb1d53dbcb1d677382ee2f038d6e7951
+  SOURCE_DIGEST: 46cd501a5511fd12f58d6c5abb94555e2642998b9e44b66faf3716de19aa4751
 
 concurrency:
   group: b860-burn-weekly
