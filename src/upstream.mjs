@@ -132,7 +132,10 @@ export function selectLatestReleaseAsset(releases, releasePattern, assetPattern,
     best === null || compareVersions(current.version, best.version) > 0 ? current : best
   ), null);
   const duplicates = candidates.filter(({ version }) => compareVersions(version, selected.version) === 0);
-  if (duplicates.length !== 1) throw new Error(`multiple assets match highest version (${duplicates.length} assets)`);
+  if (duplicates.length !== 1) {
+    const details = duplicates.map(d => `${d.release.tag_name}/${d.asset.name}`).join(', ');
+    throw new Error(`multiple assets match highest version (${duplicates.length} assets): ${details}`);
+  }
   return { asset: projectAsset(selected.asset), release: selected.release };
 }
 
