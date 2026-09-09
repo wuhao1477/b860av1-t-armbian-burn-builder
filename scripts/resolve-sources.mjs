@@ -254,9 +254,14 @@ async function resolveManifest(debian) {
     `${sourceConfig.base.repository} releases`,
   );
   const matchingReleases = publishedMatchingReleases(baseReleases, patterns.release);
+  console.error(`DEBUG: Found ${matchingReleases.length} matching releases:`, matchingReleases.map(r => r.tag_name));
   const releasesWithAssets = await Promise.all(matchingReleases.map(async (release) => ({
     ...release,
     assets: await fetchReleaseAssets(release),
+  })));
+  console.error(`DEBUG: Releases with assets:`, releasesWithAssets.map(r => ({
+    tag: r.tag_name,
+    assets: r.assets.filter(a => patterns.asset.test(a.name)).map(a => a.name)
   })));
   const selectedBase = selectLatestReleaseAsset(
     releasesWithAssets,
