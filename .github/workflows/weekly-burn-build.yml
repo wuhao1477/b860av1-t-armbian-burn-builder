@@ -168,6 +168,14 @@ jobs:
             out/burn-dtb-contract.json
             out/RELEASE.md
           retention-days: 1
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: b860-developer-assets
+          path: |
+            source-assets/${{ needs.detect.outputs.asset_name }}
+            source-assets/boot-components.json
+            source-assets/resolved-sources.json
+          retention-days: 1
 
   publish:
     needs: [detect, build]
@@ -180,6 +188,10 @@ jobs:
         with:
           name: b860-burn-output
           path: out
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: b860-developer-assets
+          path: developer-assets
       - name: Publish private prerelease
         env:
           GH_TOKEN: ${{ github.token }}
@@ -197,6 +209,9 @@ jobs:
             out/vendor-boot-contract.json
             out/burn-dtb-contract.json
             out/RELEASE.md
+            developer-assets/*.img.gz
+            developer-assets/boot-components.json
+            developer-assets/resolved-sources.json
           )
           draft_release_ready() {
             [[ "$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease \
