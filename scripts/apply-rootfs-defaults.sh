@@ -357,3 +357,11 @@ $sudo test -f "$root_mount$hcodec_extra/meson_hcodec.ko" || {
   exit 1
 }
 say "已装 meson_hcodec.ko 到 $hcodec_extra（stage=1 开机自动加载）"
+
+# ---- 8. One-KVM V4L2 M2M 编码器启用 -------------------------------------
+# One-KVM 默认在 Amlogic 平台禁用 V4L2 M2M（防误检测成软解），需要环境变量启用。
+# 写进 /etc/environment 让所有会话都能看到（systemd service / SSH / 本地登录）。
+$sudo tee -a "$root_mount/etc/environment" >/dev/null <<'ENV'
+ONE_KVM_V4L2M2M_ALLOW=1
+ENV
+say '已启用 ONE_KVM_V4L2M2M_ALLOW=1（One-KVM 可识别 meson-hcodec 编码器）'
