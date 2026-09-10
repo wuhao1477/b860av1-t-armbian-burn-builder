@@ -78,9 +78,9 @@ static bool dbg;
 module_param(dbg, bool, 0644);
 MODULE_PARM_DESC(dbg, "每帧打一行 QP / 字节数 / VLC 落盘进度");
 
-static uint waitms = 300;
+static uint waitms = 2000;
 module_param(waitms, uint, 0644);
-MODULE_PARM_DESC(waitms, "等一帧编完的上限（毫秒）。实测编通一帧只要 7 ms，超了就是 ucode 卡死了，抬 QP 重来");
+MODULE_PARM_DESC(waitms, "等一帧编完的上限（毫秒）。实测快帧7ms，复杂帧可能数百ms");
 
 /* 厂商头 + 切片，由 fetch-vendor.sh 放到同一个目录里 */
 #include "hcodec_regs.h"
@@ -952,7 +952,7 @@ static void hc_work(struct work_struct *w)
 	u32 total = 0, off = 0;
 	bool idr;
 	u8 *out;
-	int ret, q;
+	int ret, q, retries = 0;
 
 	src = v4l2_m2m_next_src_buf(ctx->fh.m2m_ctx);
 	dst = v4l2_m2m_next_dst_buf(ctx->fh.m2m_ctx);
@@ -1004,17 +1004,20 @@ static void hc_work(struct work_struct *w)
 			       hc_vendor_fmt(ctx->fourcc), q, &total);
 		if (ret != -ETIMEDOUT || q >= 51)
 			break;
-		/* ucode 在「这一帧太贵」的宏块上会自己卡死在 MB_HEADER，谁也叫不醒
-		 * （实测：加时间到 45 s、腾码流环、替它应答 *_DONE、换 IE_ME_MB_TYPE、
-		 * 恢复厂商的 SAD 率项，全都不管用）。唯一可靠的出路是抬 QP 重编 ——
-		 * 抬过一次就记住下限，别每帧都去撞一遍。抬 QP 得重发 PPS，所以强制成 IDR。
+		/* 重试3次再永久抬QP floor：偶发慢帧不该影响后续所有帧。
+		 * ucode 在「这一帧太贵」的宏块上会卡死在 MB_HEADER，抬 QP 是唯一出路。
 		 */
+		retries++;
+		if (retries < 3) {
+			pr_info("hcodec: 超时重试 %d/3，QP=%d\n", retries, q);
+			continue;
+		}
 		q = min(q + 4, 51);
 		hc_qp_floor = (u32)q;
 		idr = true;
-		pr_warn_once("hcodec: %ux%u 在 QP %u 上把 ucode 卡住了，抬到 %d 重编（以后从这里起）\n",
-			     hc_wq.pic.encoder_width, hc_wq.pic.encoder_height,
-			     ctx->cur_qp, q);
+		pr_warn("hcodec: %ux%u 在 QP %u 上重试3次均超时，抬到 %d（floor生效）\n",
+			hc_wq.pic.encoder_width, hc_wq.pic.encoder_height,
+			ctx->cur_qp, q);
 	}
 	if (!ret && off + total > vb2_plane_size(&dst->vb2_buf, 0))
 		ret = -ENOSPC;
