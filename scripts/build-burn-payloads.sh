@@ -137,6 +137,13 @@ node "$root/scripts/burn-image.mjs" prepare-kernel "$kernel" "$tmp/Image.gz" >/d
 cp -- "$initrd" "$tmp/initrd.img"
 node "$root/scripts/burn-image.mjs" standalone-dtb \
   "$dtb" "$root/board-overlays/burn-partitions.dtso" "$tmp/linux.dtb" >/dev/null
+
+# USB OTG 修复：添加 resets = <0x11 0x22> 到 usb@c9100000
+dtc -I dtb -O dts "$tmp/linux.dtb" 2>/dev/null \
+  | awk '/usb@c9100000 \{/,/\};/ { if (/dr_mode = "peripheral";/) { print; print "\t\t\t\tresets = <0x11 0x22>;"; next } } { print }' \
+  | dtc -I dts -O dtb -o "$tmp/linux.dtb" 2>/dev/null
+echo "  USB OTG: 已注入 resets 属性到 DTB"
+
 node "$root/scripts/burn-image.mjs" check-standalone-dtb "$tmp/linux.dtb" >/dev/null
 dtb_path="/dtb/amlogic/$board_dtb"
 node "$root/scripts/mainline-boot.mjs" extlinux 1024 "$root_uuid" "$dtb_path" \
