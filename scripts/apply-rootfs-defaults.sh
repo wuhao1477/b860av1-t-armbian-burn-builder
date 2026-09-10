@@ -365,3 +365,21 @@ $sudo tee -a "$root_mount/etc/environment" >/dev/null <<'ENV'
 ONE_KVM_V4L2M2M_ALLOW=1
 ENV
 say '已启用 ONE_KVM_V4L2M2M_ALLOW=1（One-KVM 可识别 meson-hcodec 编码器）'
+
+# ---- 9. USB OTG DTB 修复 ------------------------------------------------
+# 注入 resets 属性到 /boot/dtb/amlogic/*.dtb 解决 dwc2_core_reset HANG!
+# burn.img 引导用的 DTB 已在 build-burn-payloads.sh 修复，但 rootfs 里的副本还需打补丁。
+board_dtb=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).dtb)' \
+  "$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)/config/board.json")
+dtb_path="$root_mount/boot/dtb/amlogic/$board_dtb"
+if [[ -f "$dtb_path" ]]; then
+  temp_dts=$(mktemp)
+  scratch+=("$temp_dts")
+  dtc -I dtb -O dts "$dtb_path" 2>/dev/null \
+    | awk '/usb@c9100000 \{/,/\};/ { if (/dr_mode = "peripheral";/) { print; print "\t\t\t\tresets = <0x11 0x22>;"; next } } { print }' \
+    > "$temp_dts"
+  dtc -I dts -O dtb -o "$dtb_path" "$temp_dts" 2>/dev/null
+  say "已修复 $board_dtb（注入 resets 到 usb@c9100000）"
+else
+  say "跳过 DTB 修复（$dtb_path 不存在）"
+fi
