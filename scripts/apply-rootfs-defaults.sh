@@ -340,7 +340,11 @@ $sudo chmod 0644 "$root_mount$hcodec_extra/meson_hcodec.ko"
 $sudo tee "$root_mount/etc/modprobe.d/meson_hcodec.conf" >/dev/null <<'CONF'
 # 由 scripts/apply-rootfs-defaults.sh 写入。stage=1 = 只映射 + 注册节点，硬件等到
 # 第一次 STREAMON 再上电；selftest=0 = insmod 时别编那帧合成图。
-options meson_hcodec stage=1 selftest=0
+#
+# waitms=300：编通一帧实测 7 ms。默认 2000 ms 意味着一帧撞上 ucode 卡死时要
+# 白等 3 次 × 2 s 才抬 QP 重编，实机观测到帧间隔被拖到 3.6 s；收到 300 ms 后
+# 最坏代价降到 0.9 s，而正常帧完全不受影响（7 ms ≪ 300 ms）。
+options meson_hcodec stage=1 selftest=0 waitms=300
 CONF
 $sudo tee "$root_mount/etc/modules-load.d/meson_hcodec.conf" >/dev/null <<'CONF'
 # 由 scripts/apply-rootfs-defaults.sh 写入。常规文件 —— 符号链接进不了镜像，

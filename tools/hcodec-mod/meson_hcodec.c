@@ -78,7 +78,11 @@ static bool dbg;
 module_param(dbg, bool, 0644);
 MODULE_PARM_DESC(dbg, "每帧打一行 QP / 字节数 / VLC 落盘进度");
 
-static uint waitms = 2000;
+/* 编通一帧实测 7 ms。2000 ms 会让一帧撞上 ucode 卡死时白等 3 次 × 2 s 才抬 QP
+ * 重编，实机观测到帧间隔被拖到 3.6 s；300 ms 把最坏代价压到 0.9 s，而正常帧
+ * 完全不受影响（7 ms ≪ 300 ms）。tests/hcodec-encoder.test.mjs 断言这个值。
+ */
+static uint waitms = 300;
 module_param(waitms, uint, 0644);
 MODULE_PARM_DESC(waitms, "等一帧编完的上限（毫秒）。实测快帧7ms，复杂帧可能数百ms");
 
@@ -803,6 +807,10 @@ struct hc_ctx {
 	u32 gop, bitrate, qp_i, qp_p, qp_min, qp_max;
 	u32 cur_qp, since_idr;
 	u32 sequence;		/* 帧序号，每次 STREAMON 归零；见 hc_work */
+	/* 实测帧间隔（纳秒，EWMA）。码率控制必须按真实节奏算预算，不能按配置的
+	 * fps —— 见 hc_rate()。
+	 */
+	u64 last_frame_ns, frame_ival_ns;
 	/* ucode 不做色彩变换、SPS 里也没有 VUI，所以 colorimetry 只是元数据：
 	 * 原样收下、原样带到 CAPTURE（v4l2-compliance 强制要求这个 round-trip）。
 	 */
@@ -918,19 +926,62 @@ static int hc_hw_setup(struct hc_ctx *ctx)
 	return 0;
 }
 
-/* ponytail: 一拍反馈的码率控制，够 ffmpeg 用。真要 CBR 再上二次模型。 */
-static void hc_rate(struct hc_ctx *ctx, u32 got)
+/* 码率控制漂移够大时会自己插一个 IDR 去换 QP，这是两次之间的最小帧距。 */
+#define HC_QP_IDR_GAP 30
+
+/* 实测帧间隔，EWMA 1/4 权重。上游配的 fps 只是它的意愿，真实节奏得自己量。 */
+static void hc_frame_ival(struct hc_ctx *ctx)
+{
+	u64 now = ktime_get_ns();
+
+	if (ctx->last_frame_ns && now > ctx->last_frame_ns) {
+		u64 d = now - ctx->last_frame_ns;
+
+		ctx->frame_ival_ns = ctx->frame_ival_ns ?
+			(ctx->frame_ival_ns * 3 + d) / 4 : d;
+	}
+	ctx->last_frame_ns = now;
+}
+
+/* ponytail: 一拍反馈的码率控制，够 ffmpeg 用。真要 CBR 再上二次模型。
+ *
+ * 预算必须按**实测**帧间隔算，不能按配置的 fps。上游配的 fps 是它想要的，不是
+ * 流水线真能给的：实机 One-KVM 配 1080p@30，但采集卡只出 MJPEG、板子没有 MJPEG
+ * 硬解，libyuv 软解一帧就要 ~150 ms，实际只喂得动 6.7 fps。按 30 fps 算出来的
+ * 每帧预算 16 KB 只有真实可用码率的 1/4.5，于是码率控制把 QP 一路顶到 51
+ * （H.264 上限、画质最差），码流却只有 0.8 Mbps —— 4 Mbps 的预算白白浪费。
+ *
+ * 死区也必须窄。原来是 [target-target/4, target+target/8]，KVM 画面（大片静态
+ * 文字）每帧稳定落在死区正中，QP 因为一次复杂帧升上去就再也降不回来。
+ */
+static void hc_rate(struct hc_ctx *ctx, u32 got, bool idr)
 {
 	u32 target;
+	u64 ival;
 
-	if (!ctx->bitrate || !ctx->fps_den)
+	if (!ctx->bitrate)
 		return;
-	target = ctx->bitrate / 8 * ctx->fps_num / ctx->fps_den;
+	/* 没测出间隔（第一帧）就退回配置值 */
+	ival = ctx->frame_ival_ns;
+	if (!ival) {
+		if (!ctx->fps_den)
+			return;
+		ival = div_u64((u64)NSEC_PER_SEC * ctx->fps_num, ctx->fps_den);
+	}
+	/* 掉线/暂停时间隔会变得很大，别让预算跟着炸到没边 */
+	ival = min_t(u64, ival, NSEC_PER_SEC / 4);
+	target = div_u64((u64)(ctx->bitrate / 8) * ival, NSEC_PER_SEC);
 	if (!target)
 		return;
-	if (got > target + target / 8 && ctx->cur_qp < ctx->qp_max)
+	/* IDR 天生就是 P 帧的 3 倍大（实测 100 KB vs 30 KB），拿它去调 QP 只会让
+	 * 控制环自激：IDR 超预算 → QP 升 → 和 hc_hdr_qp 差≥2 → 又强制一个 IDR。
+	 * 实机观测到 174 帧里 102 个 IDR。所以 IDR 只记账、不参与反馈。
+	 */
+	if (idr)
+		return;
+	if (got > target + target / 16 && ctx->cur_qp < ctx->qp_max)
 		ctx->cur_qp++;
-	else if (got < target - target / 4 && ctx->cur_qp > ctx->qp_min)
+	else if (got < target - target / 16 && ctx->cur_qp > ctx->qp_min)
 		ctx->cur_qp--;
 }
 
@@ -982,6 +1033,19 @@ static void hc_work(struct work_struct *w)
 	 * 就是这么干的（每个 IDR 先 ENCODER_SEQUENCE 再 ENCODER_PICTURE）。
 	 */
 	ctx->cur_qp = clamp(ctx->cur_qp, ctx->qp_min, ctx->qp_max);
+	/* QP 只能在 IDR 换（见上面那段注释），可 WebRTC 把 GOP_SIZE 设成 0 —— 只在
+	 * 客户端要关键帧时才发 IDR。于是码率控制算出来的 cur_qp 永远写不进 PPS：
+	 * 实机观测到 hc_hdr_qp 卡在 51（H.264 上限、画质最差）连跑 131 帧一个 IDR
+	 * 都没有，画面还不如直接看采集卡的 MJPEG。所以漂移够大时自己插一个 IDR：
+	 * 代价是一帧变大，换来的是 QP 能真正跟上目标码率。
+	 *
+	 * 但必须限频。IDR 实测 100 KB、P 帧才 30 KB，不设下限的话控制环会自激：
+	 * IDR 超预算 → QP 升 → 漂移够了 → 又一个 IDR，实机观测到 174 帧里 102 个
+	 * IDR、码流冲到 5.5 Mbps 打爆 WiFi。至少隔 HC_QP_IDR_GAP 帧才准插一个。
+	 */
+	if (!idr && ctx->since_idr >= HC_QP_IDR_GAP &&
+	    abs((int)ctx->cur_qp - (int)hc_hdr_qp) >= 2)
+		idr = true;
 	q = idr ? (int)ctx->cur_qp : (int)hc_hdr_qp;
 	if (q < (int)hc_qp_floor) {
 		q = (int)hc_qp_floor;
@@ -1027,7 +1091,8 @@ static void hc_work(struct work_struct *w)
 		       total);
 		vb2_set_plane_payload(&dst->vb2_buf, 0, off + total);
 		ctx->since_idr = idr ? 1 : ctx->since_idr + 1;
-		hc_rate(ctx, off + total);
+		hc_frame_ival(ctx);
+		hc_rate(ctx, off + total, idr);
 	}
 
 done:
