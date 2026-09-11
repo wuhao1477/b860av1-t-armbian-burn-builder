@@ -174,12 +174,13 @@ set -e
 # 它是不是又掉了留给下一次实机对照。
 zram_dropin=/etc/systemd/system/sysinit.target.d/10-b860-armbian-zram-config.conf
 expand_dropin=/etc/systemd/system/multi-user.target.d/10-b860-expand-rootfs.conf
+sshd_keygen_dropin=/etc/systemd/system/sshd-keygen.service.d/10-b860-any-boot.conf
 mapfile -t vdec_blobs < <(node -e '
   const fs = require("fs");
   const spec = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).vdecFirmware;
   for (const file of Object.keys(spec.files)) console.log(`${spec.installPath}/${file}`);
 ' "$root/config/board.json")
-for dropin in "$zram_dropin" "$expand_dropin" "${vdec_blobs[@]}" "$hcodec_ko"; do
+for dropin in "$zram_dropin" "$expand_dropin" "$sshd_keygen_dropin" "${vdec_blobs[@]}" "$hcodec_ko"; do
   debugfs -R "stat $dropin" "$tmp/rootfs.ext4" 2>&1 | grep -q '^Inode:' || {
     echo "drop-in is missing from the packaged rootfs: $dropin" >&2
     exit 1

@@ -239,8 +239,10 @@ test('rootfs defaults install the out-of-tree module that hardware encode needs'
   assert.equal(fs.statSync(ko).mode & 0o777, 0o644);
   // stage=1 selftest=0 是唯一能开机自动加载的组合：硬件推到第一次 STREAMON 才上电，
   // 默认的 stage=9 会让 systemd-modules-load 在开机极早期点硬件，实测卡死冷启动。
+  // waitms=300：编通一帧实测 7 ms，撞上 ucode 卡死时默认的 2000 ms 会让抬 QP 重编
+  // 白等 3 × 2 s（实机看到帧间隔被拖到 3.6 s）。
   const options = fs.readFileSync(path.join(directory, 'etc/modprobe.d/meson_hcodec.conf'), 'utf8');
-  assert.match(options, /^options meson_hcodec stage=1 selftest=0$/m);
+  assert.match(options, /^options meson_hcodec stage=1 selftest=0 waitms=300$/m);
   // 两个都得是常规文件：符号链接进不了镜像（docs/known-issues.md 第 8 条）。
   const autoload = fs.readFileSync(path.join(directory, 'etc/modules-load.d/meson_hcodec.conf'), 'utf8');
   assert.match(autoload, /^meson_hcodec$/m);
@@ -269,6 +271,25 @@ test('rootfs defaults refuse a rootfs without the encoder microcode', (context) 
   assert.match(result.stderr, /missing the encoder microcode \/lib\/firmware\/video\/h264_enc\.bin/);
 });
 
+test('rootfs defaults let sshd generate its host keys on a non-first boot', (context) => {
+  // 实机：刷完机 SSH 连不上，sshd 只说 `no hostkeys available -- exiting`。
+  // sshd-keygen.service 本来是 enabled 的，但它带 ConditionFirstBoot=yes，而底包的
+  // /etc/machine-id 已经写好 —— journal 里一次开机跳了 7 遍
+  // 「skipped, unmet condition check ConditionFirstBoot=yes」，密钥一辈子生不出来。
+  const directory = fakeRootfs(context);
+
+  assert.equal(apply(directory).status, 0);
+
+  const dropin = fs.readFileSync(
+    path.join(directory, 'etc/systemd/system/sshd-keygen.service.d/10-b860-any-boot.conf'), 'utf8',
+  );
+  // 空值 = 重置条件列表。写成 ConditionFirstBoot=no 是「必须不是首启」，一样是坑。
+  assert.match(dropin, /^ConditionFirstBoot=$/m);
+  assert.match(dropin, /^\[Unit\]$/m);
+  // 密钥必须留给板子自己生成：构建时生成就是让所有刷同一个包的板共用一份私钥。
+  assert.ok(!exists(directory, 'etc/ssh/ssh_host_rsa_key'));
+});
+
 test('the packager verifies the preseed on the image it is about to sparse', () => {
   // 「脚本打印了启用」和「字节真的在包里」是两件事，build-47.1 就是在这里出事的。
   // 所以 dd 之后必须用 debugfs 复查一遍 drop-in，缺了让构建红。
@@ -288,7 +309,8 @@ test('the packager verifies the preseed on the image it is about to sparse', () 
   assert.match(packager, /zram_dropin=\/etc\/systemd\/system\/sysinit\.target\.d\/10-b860-armbian-zram-config\.conf/);
   assert.match(packager, /expand_dropin=\/etc\/systemd\/system\/multi-user\.target\.d\/10-b860-expand-rootfs\.conf/);
   // 微码走同一个 debugfs 循环：清单从 board.json 读，加第四个文件不用改脚本。
-  assert.match(between, /for dropin in "\$zram_dropin" "\$expand_dropin" "\$\{vdec_blobs\[@\]\}" "\$hcodec_ko"/);
+  assert.match(packager, /sshd_keygen_dropin=\/etc\/systemd\/system\/sshd-keygen\.service\.d\/10-b860-any-boot\.conf/);
+  assert.match(between, /for dropin in "\$zram_dropin" "\$expand_dropin" "\$sshd_keygen_dropin" "\$\{vdec_blobs\[@\]\}" "\$hcodec_ko"/);
   assert.match(between, /vdecFirmware/);
   // .ko 在包里还不够：modprobe 靠 modules.dep 找它、也靠它先加载那两个 =m 依赖。
   // 索引没重生成的话开机 systemd-modules-load 静默失败，实机就是「没有 /dev/videoN」。

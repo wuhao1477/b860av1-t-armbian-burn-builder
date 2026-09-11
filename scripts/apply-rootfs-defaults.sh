@@ -370,7 +370,37 @@ ONE_KVM_V4L2M2M_ALLOW=1
 ENV
 say '已启用 ONE_KVM_V4L2M2M_ALLOW=1（One-KVM 可识别 meson-hcodec 编码器）'
 
-# ---- 9. USB OTG DTB 修复 ------------------------------------------------
+# ---- 9. SSH 主机密钥能在开机时生成 --------------------------------------
+# 刷完机 SSH 连不上，sshd 日志只有一句 `sshd: no hostkeys available -- exiting`。
+# /etc/ssh 里一个 ssh_host_*_key 都没有。
+#
+# 不是 unit 没开：sshd-keygen.service 是 enabled 的，四个 *.wants 链接（ssh.service
+# / sshd.service / sshd@.service / ssh.socket）上游镜像里就有。真因是它带
+# ConditionFirstBoot=yes，而底包里 /etc/machine-id 已经写好了 —— systemd 只在
+# machine-id 为空时才认「首次启动」，所以这个 unit 永远被跳过。实机 journal：
+#   sshd-keygen.service ... skipped, unmet condition check ConditionFirstBoot=yes
+# （一次开机刷了 7 遍，ConditionResult=no）。
+#
+# 不在构建时生成密钥：那会让每块刷了同一个包的板子共用同一份主机密钥，等于把
+# 私钥公开发布。清掉这个条件，密钥就还是各板首次开机时自己生成、各不相同。
+# ssh-keygen -A 只补缺失的类型，加上 RemainAfterExit=yes，每次开机跑一遍无副作用。
+#
+# 空值是 systemd 的「重置这个条件列表」写法，不是「条件为空字符串」。
+$sudo mkdir -p "$root_mount/etc/systemd/system/sshd-keygen.service.d"
+$sudo tee "$root_mount/etc/systemd/system/sshd-keygen.service.d/10-b860-any-boot.conf" >/dev/null <<'CONF'
+# 由 scripts/apply-rootfs-defaults.sh 写入。底包的 /etc/machine-id 非空，
+# ConditionFirstBoot=yes 永远不成立，主机密钥一辈子生不出来 → sshd 起不来。
+[Unit]
+ConditionFirstBoot=
+CONF
+# 后置断言，同 §1/§2/§6：这一条没生效就是发一个 SSH 进不去的包。
+$sudo test -f "$root_mount/etc/systemd/system/sshd-keygen.service.d/10-b860-any-boot.conf" || {
+  echo 'sshd-keygen drop-in did not land in the rootfs: the flashed image would have no host keys' >&2
+  exit 1
+}
+say '已清掉 sshd-keygen.service 的 ConditionFirstBoot（开机自动生成主机密钥）'
+
+# ---- 10. USB OTG DTB 修复 -----------------------------------------------
 # 注入 resets 属性到 /boot/dtb/amlogic/*.dtb 解决 dwc2_core_reset HANG!
 # burn.img 引导用的 DTB 已在 build-burn-payloads.sh 修复，但 rootfs 里的副本还需打补丁。
 board_dtb=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1])).dtb)' \
